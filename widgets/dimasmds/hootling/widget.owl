@@ -1,5 +1,5 @@
 widget "hootling" {
-  meta { owl: 5; description: "A pixel owl virtual pet: feed, play, clean, bathe and cure it. Earn coins, xp and badges; buy treats, outfits, homes, toys and decor, and hatch animal friends to keep it company"; version: "4.2"; license: "MIT"; category: "pets" }
+  meta { owl: 5; description: "A pixel owl virtual pet: feed, play, clean, bathe and cure it. Earn coins, xp and badges; buy treats, outfits, homes, toys and decor, and hatch animal friends to keep it company"; version: "4.3"; license: "MIT"; category: "pets" }
   size: 3x3
   minSize: 2x2
   padding: 6
@@ -228,8 +228,8 @@ widget "hootling" {
   when hatched && foodAt > 0 && foodH == 0 && !foodMiss { mistakes = mistakes + 1; foodMiss = true; notify("hootling", "Your owl is starving. Feed it!") }
   when hatched && joyAt > 0 && joyH == 0 && !joyMiss { mistakes = mistakes + 1; joyMiss = true }
   when hatched && washAt > 0 && washH == 0 && !washMiss { mistakes = mistakes + 1; washMiss = true; notify("hootling", "Your owl is filthy. Give it a bath!") }
-  when hatched && foodAt > 0 && !asleep && !sick && (poops >= 3 || poops >= 1 && washH == 0 || foodH == 0 && joyH == 0) { sick = true; notify("hootling", "Your owl is sick. It needs medicine.") }
-  when !asleep { lightsOff = false }
+  when hatched && now != null && foodAt > 0 && !asleep && !sick && (poops >= 3 || poops >= 1 && washH == 0 || foodH == 0 && joyH == 0) { sick = true; notify("hootling", "Your owl is sick. It needs medicine.") }
+  when now != null && !asleep { lightsOff = false }
   // A friend's egg hatches.
   at nextHatch {
     toast = "an egg hatched! say hi"
@@ -239,8 +239,9 @@ widget "hootling" {
 
   // The daily visit: the first time it's awake each day pays a bonus that grows
   // with the streak of days in a row, and starts the day's goals afresh.
-  when hatched && !asleep && lastDay != todayKey {
-    streak = lastDay == yKey ? streak + 1 : 1
+  when hatched && now != null && !asleep && lastDay != todayKey {
+    // lastDay is null only on saves from 4.2 and older, where every start cleared it: count those as yesterday.
+    streak = lastDay == yKey || lastDay == null ? streak + 1 : 1
     coins = coins + 5 + 5 * min(streak, 7) + (outIds.indexOf("hamster") >= 0 ? 10 : 0)
     xp = xp + 5
     toast = "day ${streak} streak! +${5 + 5 * min(streak, 7) + (outIds.indexOf("hamster") >= 0 ? 10 : 0)}¢"
