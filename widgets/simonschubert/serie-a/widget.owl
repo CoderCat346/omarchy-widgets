@@ -2,11 +2,10 @@ widget "serie-a" {
   meta {
     owl: 17
     description: "Serie A results, live scores and kick-offs from ESPN with club crests, and the table with European and relegation places. Tap for every match"
-    version: "1.5"
+    version: "1.6"
     license: "MIT"
     category: "sport"
   }
-  requires { pacman: ["curl", "jq"] }
   // What it says, in the phone's language where it has a set. Club names and ESPN's match minute
   // (45', HT, FT) come as ESPN writes them.
   strings {
@@ -20,66 +19,70 @@ widget "serie-a" {
   size: 6x4
   minSize: 3x3
 
-  // ESPN's scoreboard only answers one day at a time, so this asks for the last
-  // three days and the next six, and keeps only what the tile shows. Crests are
-  // referred to by file name, kept to [a-z0-9].png.
-  source games = cmd("""
-    u=https://site.api.espn.com/apis/site/v2/sports/soccer/ita.1/scoreboard
-    # One curl for all the days, so one process and connection rather than one each, and the dates from bash itself.
-    printf -v now '%(%s)T' -1
-    urls=(); for i in -3 -2 -1 0 1 2 3 4 5 6; do printf -v d '%(%Y%m%d)T' $((now + i * 86400)); urls+=("$u?dates=$d"); done
-    curl -fsm 10 --compressed "${urls[@]}" | jq -sc '[.[].events[] | .competitions[0] as $c | {
-      id, at: (.date[0:16] + ":00Z" | fromdateiso8601),
-      state: $c.status.type.state, detail: $c.status.type.shortDetail,
-      teams: [$c.competitors[] | {
-        side: .homeAway, abbr: .team.abbreviation, name: .team.shortDisplayName, score, winner: (.winner // false),
-        logo: ((.team.logo // "") | sub(".*/"; "") | if test("^[a-z0-9]+[.]png$") then . else "" end)
-      }]
-    }] | unique_by(.id) | sort_by(.at)'
-  """) every 5m json timeout 60s
-
-  // The table, with each club's crest fetched once into ~/.cache/espn-logos and
-  // left there, at 96 px. Zones come from ESPN's notes (Champions League, relegation...).
-  source table = cmd("""
-    d=~/.cache/espn-logos/soccer
-    mkdir -p "$d"
-    t=$(curl -fsm 20 --compressed https://site.api.espn.com/apis/v2/sports/soccer/ita.1/standings | jq -c '[.children[] | {
-      name, teams: [.standings.entries[] | (reduce .stats[] as $s ({}; .[$s.name] = ($s.value // 0 | floor))) as $st | {
-        id: .team.id, abbr: .team.abbreviation, name: .team.shortDisplayName,
-        logo: ((.team.logos[0].href // "") | sub(".*/"; "") | if test("^[a-z0-9]+[.]png$") then . else "" end),
-        rank: $st.rank, played: $st.gamesPlayed, won: $st.wins, drawn: $st.ties, lost: $st.losses,
-        gd: $st.pointDifferential, pts: $st.points,
-        zone: ((.note.description // "") | ascii_downcase | if . == "" then null
-          elif test("relegat") and test("playoff") then "orange"
-          elif test("relegat|eliminat") then "red"
-          elif test("champions league$|round of 16") then "green"
-          else "blue" end)
-      }] | sort_by(.rank)
-    }]') || exit 1
-    for f in $(printf '%s' "$t" | jq -r '.[].teams[].logo | select(. != "")'); do
-      [ -s "$d/$f" ] || curl -fsm 15 -o "$d/$f" "https://a.espncdn.com/combiner/i?img=/i/teamlogos/soccer/500/$f&w=96&h=96" || rm -f "$d/$f"
-    done
-    printf '%s\n' "$t"
-  """) every 30m json timeout 120s
   source now = clock every 1m
+
+  // ESPN's scoreboard answers one day at a time (it turns ranges down), so each day from three back
+  // to six ahead is its own request, straight from Android. Today and the days either side, where
+  // scores move, are asked for every 5 minutes; the rest, settled or still to come, every 30. The
+  // URLs move on at midnight, so a day that becomes today is fetched again then.
+  let api = "https://site.api.espn.com/apis/site/v2/sports/soccer/ita.1/scoreboard?dates="
+  source d0 = http("${api}${enc(fmtTime(now - 3 * 86400, "yyyyMMdd"))}") every 30m json timeout 15s
+  source d1 = http("${api}${enc(fmtTime(now - 2 * 86400, "yyyyMMdd"))}") every 30m json timeout 15s
+  source d2 = http("${api}${enc(fmtTime(now - 86400, "yyyyMMdd"))}") every 5m json timeout 15s
+  source d3 = http("${api}${enc(fmtTime(now, "yyyyMMdd"))}") every 5m json timeout 15s
+  source d4 = http("${api}${enc(fmtTime(now + 86400, "yyyyMMdd"))}") every 5m json timeout 15s
+  source d5 = http("${api}${enc(fmtTime(now + 2 * 86400, "yyyyMMdd"))}") every 30m json timeout 15s
+  source d6 = http("${api}${enc(fmtTime(now + 3 * 86400, "yyyyMMdd"))}") every 30m json timeout 15s
+  source d7 = http("${api}${enc(fmtTime(now + 4 * 86400, "yyyyMMdd"))}") every 30m json timeout 15s
+  source d8 = http("${api}${enc(fmtTime(now + 5 * 86400, "yyyyMMdd"))}") every 30m json timeout 15s
+  source d9 = http("${api}${enc(fmtTime(now + 6 * 86400, "yyyyMMdd"))}") every 30m json timeout 15s
+
+  // The table. Zones come from ESPN's notes (Champions League, relegation...).
+  source table = http("https://site.api.espn.com/apis/v2/sports/soccer/ita.1/standings") every 30m json timeout 20s
 
   state view = "matches"
 
-  let all = games ?? []
+  // A match late at night can be on two days' lists, so each is kept once.
+  let events = flatten([d0, d1, d2, d3, d4, d5, d6, d7, d8, d9].map(d => d.events ?? []))
+  let all = values(groupBy(events.map(e => {
+    id: e.id, at: parseTime(e.date),
+    state: e.competitions[0].status.type.state, detail: e.competitions[0].status.type.shortDetail,
+    teams: e.competitions[0].competitors.map(c => {
+      side: c.homeAway, abbr: c.team.abbreviation, name: c.team.shortDisplayName, score: c.score,
+      winner: c.winner ?? false, logo: last(split(c.team.logo ?? "", "/"))
+    })
+  }), g => g.id)).map(l => l[0]).sortBy(g => g.at)
   let live = all.filter(g => g.state == 'in')
   let done = all.filter(g => g.state == 'post').reverse()
   let next = all.filter(g => g.state == 'pre')
   let cap = clamp((rows ?? 4) * 3 - 2, 5, 14)
   let picked = flatten([live, done.take(ceil(cap / 2)), next]).take(cap)
-  let groups = table ?? []
+  let groups = (table.children ?? []).map(c => {
+    name: c.name,
+    teams: (c.standings.entries ?? []).map(e => {
+      e: e, n: lower(e.note.description ?? ""),
+      st: reduce(e.stats ?? [], (m, s) => set(m, s.name, floor(s.value ?? 0)), {})
+    }).map(x => {
+      id: x.e.team.id, abbr: x.e.team.abbreviation, name: x.e.team.shortDisplayName,
+      logo: last(split(x.e.team.logos[0].href ?? "", "/")),
+      rank: x.st.rank, played: x.st.gamesPlayed, won: x.st.wins, drawn: x.st.ties, lost: x.st.losses,
+      gd: x.st.pointDifferential, pts: x.st.points,
+      zone: x.n == "" ? null
+        : contains(x.n, "relegat") && contains(x.n, "playoff") ? "orange"
+        : contains(x.n, "relegat") || contains(x.n, "eliminat") ? "red"
+        : endsWith(x.n, "champions league") || contains(x.n, "round of 16") ? "green"
+        : "blue"
+    }).sortBy(t => t.rank)
+  })
   // Full club names need room: the tile decides from its own width (the landscape tile, ~290dp,
   // gets abbreviations), the full screen from the screen's.
   let tileWide = (tileWidth ?? 0) >= 360
   let screenWide = max(max(screenWidth ?? 0, tileWidth ?? 0), 240) >= 280
 
+  // Crests at 96 px from ESPN's resizer; the launcher keeps each one, so they show offline too.
   component Crest(logo, px = 18) {
     if logo {
-      Image { src: "~/.cache/espn-logos/soccer/${logo}"; size: px; fit: contain }
+      Image { src: "https://a.espncdn.com/combiner/i?img=/i/teamlogos/soccer/500/${enc(logo)}&w=96&h=96"; size: px; fit: contain }
     } else {
       Box { size: px }
     }
@@ -157,7 +160,7 @@ widget "serie-a" {
       scroll: true
       if view == "matches" {
         if count(picked) == 0 {
-          Text { text: games == null ? str.loading : str.none; style: small; color: muted }
+          Text { text: d3 == null ? str.loading : str.none; style: small; color: muted }
         } else {
           for g in picked key g.id { GameRow { g: g; wide: tileWide } }
         }

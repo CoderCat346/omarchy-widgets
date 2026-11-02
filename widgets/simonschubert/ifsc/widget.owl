@@ -2,79 +2,87 @@ widget "ifsc" {
   meta {
     owl: 17
     description: "IFSC Climbing World Cup: the next event with a countdown, the latest podiums, live results and the cup standings for boulder, lead and speed. Tap for everything"
-    version: "1.1"
+    version: "1.2"
     license: "MIT"
     category: "sport"
   }
-  requires { pacman: ["curl", "jq"] }
   size: 6x4
   minSize: 3x3
 
-  // The current season's World Cup calendar from ifsc.results.info (it only wants a
-  // Referer), and the results of the latest event that has started: top 8 of each
-  // category, with each climber's score from the last round they climbed. Flags are
-  // fetched once into ~/.cache/ifsc-flags.
-  source info = cmd("""
-    g() { curl -fsm 15 --compressed -H 'Referer: https://ifsc.results.info/' "https://ifsc.results.info$1"; }
-    lg=$(g /api/v1/ | jq -r '.current.leagues[] | select(.league_id == 1) | .url') || exit 1
-    s=$(g "$lg") || exit 1
-    ev=$(printf '%s' "$s" | jq -c --argjson now "$(date +%s)" '
-      def t: sub(" UTC$"; "Z") | sub(" "; "T") | fromdateiso8601;
-      def d: strptime("%Y-%m-%d") | strftime("%-d %b");
-      { season, events: [.events[] | (.starts_at | t) as $a | (.ends_at | t) as $b | {
-          id: .event_id,
-          name: (.event | sub("^(World Climbing Series|IFSC World Cup|IFSC Climbing World Cup|IFSC) "; "") | sub(" [0-9]{4}$"; "")),
-          full: .event, start: $a, end: $b,
-          dates: (if .local_start_date == .local_end_date then (.local_start_date | d) else "\(.local_start_date | d) – \(.local_end_date | d)" end),
-          kinds: ([.d_cats[].name | split(" ")[0] | ascii_downcase | select(. != "speed")] + [.d_cats[].name | select(test("^SPEED (Men|Women)")) | "speed"] | unique),
-          cats: [.d_cats[] | select(.name | test("RELAY") | not) | {id, name, status}],
-          state: (if $now >= $b or all(.d_cats[]; .status == "finished") then "done" elif $now >= $a then "live" else "next" end)
-      }] | sort_by(.start) }') || exit 1
-    lat=$(printf '%s' "$ev" | jq -c '[.events[] | select(.state != "next")] | last // empty')
-    cats='[]'
-    if [ -n "$lat" ]; then
-      id=$(printf '%s' "$lat" | jq -r .id)
-      cats=$(for c in $(printf '%s' "$lat" | jq -r '.cats[].id'); do g "/api/v1/events/$id/result/$c"; done | jq -sc '[.[] | {
-        name: .dcat, short: (.dcat | split(" ") | "\(.[0] | ascii_downcase) \(.[1][0:1])"), kind: (.dcat | split(" ")[0] | ascii_downcase), status,
-        round: ([.category_rounds[] | select(.status != null and .status != "pending")] | last | .name),
-        top: [.ranking[:8][] | {rank, name: "\(.firstname) \(.lastname)", country,
-          score: ([.rounds[] | select(.score != null and .score != "")] | last | .score // "" | tostring | split(" (")[0])}]
-      } | select(.top | length > 0)]') || cats='[]'
-    fi
-    d=~/.cache/ifsc-flags; mkdir -p "$d"
-    for f in $(printf '%s' "$cats" | jq -r '.[].top[].country | select(test("^[A-Z]{3}$"))' | sort -u); do
-      [ -s "$d/$f.png" ] || curl -fsm 10 -o "$d/$f.png" "https://d1n1qj9geboqnb.cloudfront.net/flags/$f.png" || rm -f "$d/$f.png"
-    done
-    [ -n "$lat" ] || lat=null
-    printf '%s' "$ev" | jq -c --argjson lat "$lat" --argjson cats "$cats" '. + {latest: (if $lat then $lat + {results: $cats} else null end)}'
-  """) every 10m json timeout 120s
+  source now = clock every 1m
+
+  // ifsc.results.info, straight from Android (it only wants a Referer). The API's root names the
+  // current season, the season lists every event (the World Cups are league 1), the latest event
+  // that has started lists its categories, and each category's results come on their own. Its
+  // season-league endpoint now wants a login, so the calendar comes from the season itself.
+  let api = "https://ifsc.results.info/api/v1"
+  let hdr = {Referer: "https://ifsc.results.info/"}
+  source root = http("https://ifsc.results.info/api/v1/", hdr) every 12h json timeout 15s
+  source sea = http(root == null ? null : "${api}/seasons/${enc(root.current.id)}", hdr) every 10m json timeout 20s
+
+  let season = root.current.season
+  let league = last(split(root.current.leagues.find(l => l.league_id == 1).url ?? "", "/"))
+  let wc = (sea.events ?? []).filter(e => str(e.league_season_id) == league)
+  let events = wc.map(e => {
+    id: e.event_id,
+    name: match(e.event, "^(?:World Climbing Series |IFSC Climbing World Cup |IFSC World Cup |IFSC )?(.*?)(?: [0-9]{4})?$")[0] ?? e.event,
+    full: e.event,
+    start: parseTime(replace(replace(e.starts_at ?? "", " UTC", "Z"), " ", "T")),
+    end: parseTime(replace(replace(e.ends_at ?? "", " UTC", "Z"), " ", "T")),
+    dates: e.local_start_date == e.local_end_date ? fmtTime(parseTime(e.local_start_date), "d MMM")
+      : "${fmtTime(parseTime(e.local_start_date), "d MMM")} – ${fmtTime(parseTime(e.local_end_date), "d MMM")}",
+    kinds: unique((e.disciplines ?? []).map(d => d.kind).filter(k => !contains(k, "relay")))
+  }).map(e => merge(e, {state: now >= e.end ? "done" : now >= e.start ? "live" : "next"})).sortBy(e => e.start)
+
+  // The latest event that has started, its categories (relays left out), and the top 8 of each,
+  // with each climber's score from the last round they climbed.
+  let lat = last(events.filter(e => e.state != "next"))
+  source ev = http(lat == null ? null : "${api}/events/${enc(lat.id)}", hdr) every 10m json timeout 20s
+  let cats = ev.id == lat.id ? (ev.d_cats ?? []).filter(c => !contains(c.dcat_name ?? "", "RELAY")) : []
+  source r0 = http(cats[0] == null ? null : "${api}/events/${enc(lat.id)}/result/${enc(cats[0].dcat_id)}", hdr) every 10m json timeout 20s
+  source r1 = http(cats[1] == null ? null : "${api}/events/${enc(lat.id)}/result/${enc(cats[1].dcat_id)}", hdr) every 10m json timeout 20s
+  source r2 = http(cats[2] == null ? null : "${api}/events/${enc(lat.id)}/result/${enc(cats[2].dcat_id)}", hdr) every 10m json timeout 20s
+  source r3 = http(cats[3] == null ? null : "${api}/events/${enc(lat.id)}/result/${enc(cats[3].dcat_id)}", hdr) every 10m json timeout 20s
+  source r4 = http(cats[4] == null ? null : "${api}/events/${enc(lat.id)}/result/${enc(cats[4].dcat_id)}", hdr) every 10m json timeout 20s
+  source r5 = http(cats[5] == null ? null : "${api}/events/${enc(lat.id)}/result/${enc(cats[5].dcat_id)}", hdr) every 10m json timeout 20s
+  // A slot whose category went away keeps its last value, so only this event's categories count.
+  let results = [r0, r1, r2, r3, r4, r5].filter(r => r != null && r.event == lat.full && any(cats, c => c.dcat_name == r.dcat)).map(r => {
+    name: r.dcat, short: "${lower(split(r.dcat, " ")[0])} ${sub(split(r.dcat, " ")[1] ?? "", 0, 1)}",
+    kind: lower(split(r.dcat, " ")[0]), status: r.status,
+    round: last((r.category_rounds ?? []).filter(x => x.status != null && x.status != "pending")).name,
+    top: take(r.ranking ?? [], 8).map(a => {
+      rank: a.rank, name: "${a.firstname} ${a.lastname}", country: a.country,
+      score: split(str(last((a.rounds ?? []).filter(x => x.score != null && x.score != "")).score ?? ""), " (")[0]
+    })
+  }).filter(c => count(c.top) > 0)
+  let finished = count(cats) > 0 && all(cats, c => c.status == "finished")
+  let latest = lat == null ? null : merge(lat, {results: results, state: finished ? "done" : lat.state})
 
   // Cup standings, top 10 of each Olympic discipline.
-  source cup = cmd("""
-    g() { curl -fsm 15 --compressed -H 'Referer: https://ifsc.results.info/' "https://ifsc.results.info$1"; }
-    lg=$(g /api/v1/ | jq -r '.current.leagues[] | select(.league_id == 1) | .url') || exit 1
-    urls=$(g "$lg" | jq -r '.cups[0].d_cats[] | select(.name | test("^(BOULDER|LEAD|SPEED) (Men|Women)$")) | .ranking_url') || exit 1
-    r=$(for u in $urls; do g "$u"; done | jq -sc '[.[] | {name: .dcat_name, short: (.dcat_name | split(" ") | "\(.[0] | ascii_downcase) \(.[1][0:1])"), kind: (.dcat_name | split(" ")[0] | ascii_downcase),
-      top: [.ranking[:10][] | {rank, name: "\(.firstname) \(.lastname)", country, score: (.score | (tonumber? // .) | if type == "number" and . == floor then floor else . end | tostring)}]} | select(.top | length > 0)] | sort_by(.kind, (.name | test("Women")))') || exit 1
-    d=~/.cache/ifsc-flags; mkdir -p "$d"
-    for f in $(printf '%s' "$r" | jq -r '.[].top[].country | select(test("^[A-Z]{3}$"))' | sort -u); do
-      [ -s "$d/$f.png" ] || curl -fsm 10 -o "$d/$f.png" "https://d1n1qj9geboqnb.cloudfront.net/flags/$f.png" || rm -f "$d/$f.png"
-    done
-    printf '%s\n' "$r"
-  """) every 1h json timeout 120s
-
-  source now = clock every 1m
+  let cupId = first(wc.filter(e => e.cup_id != null)).cup_id
+  source cupInfo = http(cupId == null ? null : "${api}/cups/${enc(cupId)}", hdr) every 12h json timeout 20s
+  let cupCats = (cupInfo.d_cats ?? []).filter(c => match(c.name ?? "", "^(BOULDER|LEAD|SPEED) (Men|Women)$") != null)
+  source c0 = http(cupCats[0] == null ? null : "${api}/cups/${enc(cupId)}/dcat/${enc(cupCats[0].id)}", hdr) every 1h json timeout 20s
+  source c1 = http(cupCats[1] == null ? null : "${api}/cups/${enc(cupId)}/dcat/${enc(cupCats[1].id)}", hdr) every 1h json timeout 20s
+  source c2 = http(cupCats[2] == null ? null : "${api}/cups/${enc(cupId)}/dcat/${enc(cupCats[2].id)}", hdr) every 1h json timeout 20s
+  source c3 = http(cupCats[3] == null ? null : "${api}/cups/${enc(cupId)}/dcat/${enc(cupCats[3].id)}", hdr) every 1h json timeout 20s
+  source c4 = http(cupCats[4] == null ? null : "${api}/cups/${enc(cupId)}/dcat/${enc(cupCats[4].id)}", hdr) every 1h json timeout 20s
+  source c5 = http(cupCats[5] == null ? null : "${api}/cups/${enc(cupId)}/dcat/${enc(cupCats[5].id)}", hdr) every 1h json timeout 20s
+  let standings = [c0, c1, c2, c3, c4, c5].filter(c => c != null && count(c.ranking ?? []) > 0).map(c => {
+    name: c.dcat_name, short: "${lower(split(c.dcat_name, " ")[0])} ${sub(split(c.dcat_name, " ")[1] ?? "", 0, 1)}",
+    kind: lower(split(c.dcat_name, " ")[0]),
+    top: take(c.ranking, 10).map(a => {
+      rank: a.rank, name: "${a.firstname} ${a.lastname}", country: a.country,
+      score: num(a.score, null) != null && num(a.score, 0) == floor(num(a.score, 0)) ? str(floor(num(a.score, 0))) : a.score
+    })
+  }).sortBy(s => "${s.kind} ${contains(s.name, "Women") ? 1 : 0}")
 
   state tab = "results"
   state pick = 0
 
-  let events = info.events ?? []
-  let latest = info.latest
   let live = latest.state == "live"
   let upcoming = events.filter(e => e.state == "next")
   let next = first(upcoming)
-  let results = latest.results ?? []
-  let standings = cup ?? []
   let wide = (tileWidth ?? 0) >= 300
   // Lines below the divider: the latest winners first, then cup leaders if 2+ fit.
   let slots = max(2, (rows ?? 4) * 2 - 1)
@@ -92,7 +100,7 @@ widget "ifsc" {
 
   component Flag(code, px = 14) {
     if code {
-      Image { src: "~/.cache/ifsc-flags/${code}.png"; width: px * 1.5; height: px; fit: contain }
+      Image { src: "https://d1n1qj9geboqnb.cloudfront.net/flags/${enc(code)}.png"; width: px * 1.5; height: px; fit: contain }
     } else {
       Box { width: px * 1.5; height: px }
     }
@@ -165,7 +173,7 @@ widget "ifsc" {
     Row {
       align: center
       Text { text: "IFSC World Cup"; style: title; weight: 1; maxLines: 1 }
-      Text { text: live ? "● live" : info.season ?? ""; style: small; width: 60; align: end; color: live ? accent : muted; bold: live }
+      Text { text: live ? "● live" : season ?? ""; style: small; width: 60; align: end; color: live ? accent : muted; bold: live }
     }
 
     // The next event (or the live one) up top.
@@ -186,7 +194,7 @@ widget "ifsc" {
         if wide { Kinds { list: next.kinds } }
         Until { t: next.start; tint: accent; fs: 15 }
       }
-    } else if info != null {
+    } else if sea != null {
       Text { text: "season over"; style: small; color: muted }
     }
 
@@ -207,12 +215,12 @@ widget "ifsc" {
         }
       }
     } else {
-      Text { text: info == null ? "loading…" : "no results yet"; style: small; color: muted }
+      Text { text: sea == null ? "loading…" : "no results yet"; style: small; color: muted }
     }
   }
 
   screen {
-    title: "IFSC World Cup ${info.season ?? ''}"
+    title: "IFSC World Cup ${season ?? ''}"
     Column {
       gap: 10
       Row {
@@ -259,7 +267,7 @@ widget "ifsc" {
           }
           let s = standings[pick]
           if s == null {
-            Text { text: cup == null ? "loading…" : "no standings yet"; style: small; color: muted }
+            Text { text: cupInfo == null ? "loading…" : "no standings yet"; style: small; color: muted }
           } else {
             Text { text: lower(s.name); style: title; color: (s.kind == "boulder" ? yellow : s.kind == "lead" ? blue : s.kind == "speed" ? red : accent) }
             for a in s.top key a.name { Athlete { a: a } }
