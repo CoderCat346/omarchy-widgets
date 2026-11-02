@@ -1,5 +1,5 @@
 widget "forecast" {
-  meta { description: "Three-day weather forecast with an hourly temperature curve, located by IP or a city you type, via wttr.in"; version: "1.6"; license: "MIT"; category: "world"; owl: 16 }
+  meta { description: "Three-day weather forecast with an hourly temperature curve, located by IP or a city you type, via wttr.in"; version: "1.7"; license: "MIT"; category: "world"; owl: 16 }
 
   // What it says, in the phone's language where it has a set. wttr names the sky in English, so other
   // languages name it from wttr's weather codes, as the today widget does.
@@ -102,20 +102,18 @@ widget "forecast" {
   size: 6x3
   minSize: 4x3
 
-  requires { pacman: ["curl", "jq"] }
 
   state city = "" persist
-  // The city, percent-encoded so it can't break the URL or the shell's single quotes. Empty means located by IP.
+  // The city, percent-encoded for the wttr.in link. Empty means located by IP.
   let q = city.replace("%", "%25").replace("+", "%2B").replace("/", "%2F").replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("'", "%27").replace(" ", "+")
+
   // Without a city wttr.in picks the location from the IP address. Only what's drawn is kept from its ~50 KB.
-  // The city comes in as $1: a """ command is taken as written, so ${q} in it would be bash's own, empty, variable.
-  source w = cmd("set -- ${sh(q)}; " + """
-    curl -fsm 12 "https://wttr.in/$1?format=j1" | jq -c '{
-      place: .nearest_area[0].areaName[0].value,
-      now: .current_condition[0] | {temp: .temp_C, desc: .weatherDesc[0].value, code: .weatherCode},
-      days: [.weather[] | {date, max: .maxtempC, min: .mintempC, hours: [.hourly[].tempC | tonumber]}]
-    }'
-  """) every 30m json timeout 20s
+  source raw = http("https://wttr.in/${enc(city)}?format=j1") every 30m json timeout 20s
+  let w = raw == null ? null : {
+    place: raw.nearest_area[0].areaName[0].value,
+    now: {temp: raw.current_condition[0].temp_C, desc: raw.current_condition[0].weatherDesc[0].value, code: raw.current_condition[0].weatherCode},
+    days: (raw.weather ?? []).map(d => {date: d.date, max: d.maxtempC, min: d.mintempC, hours: (d.hourly ?? []).map(h => num(h.tempC, 0))})
+  }
   let hours = flatten(w.days.map(d => d.hours))
   let lo = min(hours) - 2
   let hi = max(hours) + 2

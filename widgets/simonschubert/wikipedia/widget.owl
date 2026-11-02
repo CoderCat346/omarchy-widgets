@@ -1,5 +1,5 @@
 widget "wikipedia" {
-  meta { description: "Wikipedia's featured article of the day, what everyone is reading, and on this day in history"; version: "1.4"; license: "MIT"; category: "news"; owl: 16 }
+  meta { description: "Wikipedia's featured article of the day, what everyone is reading, and on this day in history"; version: "1.5"; license: "MIT"; category: "news"; owl: 16 }
 
   // What it says, and which Wikipedia it reads, in the phone's language where it has a set. The feed has no
   // featured article for the other languages' Wikipedias, nor on this day for Indonesian's; those parts stay away.
@@ -14,22 +14,23 @@ widget "wikipedia" {
   size: 6x4
   minSize: 4x3
 
-  requires { pacman: ["curl", "jq"] }
+
 
   // Wikimedia's daily feed for that language's Wikipedia; only the parts drawn are kept. Chinese comes from
   // zh.wikipedia's own feed, which writes it in Simplified script when asked, titles in their display form: Wikimedia's
   // mixes Simplified and Traditional and drops the linked names from on this day.
-  source wp = cmd("set -- ${sh(str.wiki)}; " + """
-    feed="https://api.wikimedia.org/feed/v1/wikipedia/$1/featured"
-    [ "$1" = zh ] && feed="https://zh.wikipedia.org/api/rest_v1/feed/featured"
-    curl -fsm 12 -H 'Accept-Language: zh-hans' "$feed/$(date -u +%Y/%m/%d)" | jq -c --arg wiki "$1" '
-    def title: if $wiki == "zh" then (.titles.display // .titles.normalized | gsub("<[^>]*>"; "")) else .titles.normalized end;
-    {
-      tfa: (.tfa // null | if . then {title: title, text: .extract, url: .content_urls.mobile.page} else null end),
-      read: [(.mostread.articles // [])[] | select(.namespace.id == 0) | {title: title, views, url: .content_urls.mobile.page}][:5],
-      onthisday: [(.onthisday // [])[:3][] | {year, text}]
-    }'
-  """) every 1h json timeout 20s
+  source now = clock every 1h
+  let zh = str.wiki == "zh"
+  source zhFeed = http(zh ? "https://zh.wikipedia.org/api/rest_v1/feed/featured/${enc(fmtTime(now, "yyyy", "UTC"))}/${enc(fmtTime(now, "MM", "UTC"))}/${enc(fmtTime(now, "dd", "UTC"))}" : null, {"Accept-Language": "zh-hans"}) every 1h json timeout 20s
+  source wmFeed = http(zh ? null : "https://api.wikimedia.org/feed/v1/wikipedia/${enc(str.wiki)}/featured/${enc(fmtTime(now, "yyyy", "UTC"))}/${enc(fmtTime(now, "MM", "UTC"))}/${enc(fmtTime(now, "dd", "UTC"))}") every 1h json timeout 20s
+  let feed = zh ? zhFeed : wmFeed
+  let wp = feed == null ? null : {
+    tfa: feed.tfa == null ? null : {title: zh ? join(split(feed.tfa.titles.display ?? feed.tfa.titles.normalized, "<").map(t => last(split(t, ">"))), "") : feed.tfa.titles.normalized, text: feed.tfa.extract, url: feed.tfa.content_urls.mobile.page},
+    read: take((feed.mostread.articles ?? []).filter(a => a.namespace.id == 0).map(a => {
+      title: zh ? join(split(a.titles.display ?? a.titles.normalized, "<").map(t => last(split(t, ">"))), "") : a.titles.normalized, views: a.views, url: a.content_urls.mobile.page
+    }), 5),
+    onthisday: take(feed.onthisday ?? [], 3).map(e => {year: e.year, text: e.text})
+  }
 
   onTap: url("https://${str.wiki}.m.wikipedia.org")
 

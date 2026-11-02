@@ -1,5 +1,5 @@
 widget "sun and moon" {
-  meta { description: "Sunrise, sunset, daylight left and tonight's moon phase, located by IP or a city you type, via wttr.in"; version: "1.5"; license: "MIT"; category: "world"; owl: 16 }
+  meta { description: "Sunrise, sunset, daylight left and tonight's moon phase, located by IP or a city you type, via wttr.in"; version: "1.6"; license: "MIT"; category: "world"; owl: 16 }
 
   // What it says, in the phone's language where it has a set; wttr names the moon's phase in English.
   strings {
@@ -57,23 +57,18 @@ widget "sun and moon" {
   size: 3x3
   minSize: 3x3
 
-  requires { pacman: ["curl", "jq"] }
 
   state city = "" persist
-  // The city, percent-encoded so it can't break the URL or the shell's single quotes. Empty means located by IP.
-  let q = city.replace("%", "%25").replace("+", "%2B").replace("/", "%2F").replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("'", "%27").replace(" ", "+")
-  // wttr.in gives local clock times ("07:14 AM"); date turns them into Unix time for today and tomorrow.
-  // The city comes in as $1: a """ command is taken as written, so ${q} in it would be bash's own, empty, variable.
-  source sky = cmd("set -- ${sh(q)}; " + """
-    IFS=$'\t' read -r place rise set next phase illum < <(curl -fsm 12 "https://wttr.in/$1?format=j1" | jq -r '[
-      .nearest_area[0].areaName[0].value, (.weather[0].astronomy[0] | .sunrise, .sunset),
-      .weather[1].astronomy[0].sunrise, (.weather[0].astronomy[0] | .moon_phase, .moon_illumination)
-    ] | @tsv') || exit
-    jq -nc --arg place "$place" --arg phase "$phase" \
-      --argjson rise "$(date -d "today $rise" +%s)" --argjson set "$(date -d "today $set" +%s)" \
-      --argjson next "$(date -d "tomorrow $next" +%s)" --argjson illum "$illum" \
-      '{place: $place, rise: $rise, set: $set, next: $next, phase: $phase, illum: $illum}'
-  """) every 1h json timeout 20s
+
+  // wttr.in gives local clock times ("07:14 AM"), read as today's, and tomorrow's sunrise.
+  source raw = http("https://wttr.in/${enc(city)}?format=j1") every 1h json timeout 20s
+  let sky = raw == null ? null : {
+    place: raw.nearest_area[0].areaName[0].value,
+    rise: parseTime(raw.weather[0].astronomy[0].sunrise, "hh:mm a"),
+    set: parseTime(raw.weather[0].astronomy[0].sunset, "hh:mm a"),
+    next: parseTime(raw.weather[1].astronomy[0].sunrise, "hh:mm a") + 86400,
+    phase: raw.weather[0].astronomy[0].moon_phase, illum: num(raw.weather[0].astronomy[0].moon_illumination, 0)
+  }
   source now = clock every 60s
   let day = now >= sky.rise && now < sky.set
   let p = clamp((now - sky.rise) / (sky.set - sky.rise), 0, 1)

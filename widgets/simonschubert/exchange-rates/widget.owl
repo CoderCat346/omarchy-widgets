@@ -1,24 +1,37 @@
 widget "exchange rates" {
-  meta { description: "Daily exchange rates from the European Central Bank with a 30-day trend, for the currencies in ~/.config/omarchy-proot/exchange-rates"; version: "1.2"; license: "MIT"; category: "finance" }
+  meta { description: "Daily exchange rates from the European Central Bank with a 30-day trend; tap to pick the currencies"; version: "1.3"; license: "MIT"; category: "finance"; owl: 16 }
   size: 6x2
   minSize: 3x2
 
-  requires { pacman: ["curl", "jq"] }
+  // The first code is the base currency, the ones after are what it's quoted in.
+  state codes = ["USD", "EUR", "GBP", "JPY"] persist
+  // Up to 1.2 the list was ~/.config/omarchy-proot/exchange-rates, one code per line. When Linux is
+  // there, that file is read once and taken over; without it, or once taken over, it isn't read again.
+  state migrated = false persist
+  source old = file("~/.config/omarchy-proot/exchange-rates") optional
+  on old first {
+    if !migrated {
+      let found = lines(value).map(l => upper(trim(l))).filter(l => l != "" && !startsWith(l, "#"))
+      if count(found) >= 2 { codes = found }
+      migrated = true
+    }
+  }
 
-  // The first line is the base currency, the lines after are what it's quoted in.
-  source fx = cmd("""
-    f=~/.config/omarchy-proot/exchange-rates
-    mkdir -p "${f%/*}"
-    [ -f "$f" ] || printf 'USD\nEUR\nGBP\nJPY\n' > "$f"
-    codes=$(grep -v '^#' "$f" | grep . | tr a-z A-Z)
-    base=$(head -n1 <<< "$codes")
-    to=$(tail -n +2 <<< "$codes" | paste -sd, -)
-    curl -fsLm 10 "https://api.frankfurter.dev/v1/$(date -d '30 days ago' +%F)..?base=$base&symbols=$to" | jq -c --arg to "$to" '
-      (.rates | to_entries | sort_by(.key) | map(.value)) as $days | $days[-1] as $now | $days[-2] as $prev |
-      {base, rates: [$to | split(",")[] | select($now[.]) | {code: ., rate: $now[.], change: (($now[.] / $prev[.] - 1) * 100), hist: [$days[][.]]}]}'
-  """) every 1h json timeout 15s
+  let base = codes[0]
+  let to = drop(codes, 1)
+  source now = clock every 1h
+  source raw = http("https://api.frankfurter.dev/v1/${enc(fmtTime(now - 30 * 86400, "yyyy-MM-dd"))}..?base=${enc(base)}&symbols=${enc(join(to, ","))}") every 1h json timeout 15s
+  // The days in order, then each currency's latest rate, its change from the day before and its 30 days.
+  let days = entries(raw.rates ?? {}).sortBy(e => e.key).map(e => e.value)
+  let fx = {
+    base: raw.base,
+    rates: count(days) < 2 ? [] : to.filter(c => get(last(days), c) != null).map(c => {
+      code: c, rate: get(last(days), c), change: (get(last(days), c) / get(days[count(days) - 2], c) - 1) * 100,
+      hist: days.map(d => get(d, c))
+    })
+  }
 
-  onTap: terminal('$EDITOR ~/.config/omarchy-proot/exchange-rates', "exchange rates")
+  onTap: screen()
 
   component Currency(c) {
     Column {
@@ -47,6 +60,24 @@ widget "exchange rates" {
       for c in fx.rates key c.code {
         Currency { c: c }
       }
+    }
+  }
+
+  screen {
+    title: "exchange rates"
+    Column {
+      gap: 8
+      Text { text: "currency codes, the base first"; style: label; color: muted }
+      Input {
+        text: join(codes, " ")
+        placeholder: "USD EUR GBP JPY"
+        onSubmit: {
+          let next = split(upper(replace(value, ",", " ")), " ").map(c => trim(c)).filter(c => c != "")
+          if count(next) >= 2 { codes = next }
+        }
+      }
+      Text { text: "${base} in ${join(to, ", ")}"; style: small; color: muted }
+      Button { text: "close"; onTap: close() }
     }
   }
 }

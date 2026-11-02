@@ -1,5 +1,5 @@
 widget "free games" {
-  meta { description: "Games free to keep on the Epic Games Store right now and the ones coming next"; version: "1.4"; license: "MIT"; category: "games"; owl: 16 }
+  meta { description: "Games free to keep on the Epic Games Store right now and the ones coming next"; version: "1.5"; license: "MIT"; category: "games"; owl: 16 }
 
   // What it says, in the phone's language where it has a set. Game titles come as Epic names them.
   strings {
@@ -13,18 +13,17 @@ widget "free games" {
   size: 6x3
   minSize: 3x2
 
-  requires { pacman: ["curl", "jq"] }
+
 
   // A free giveaway is a promotion with a 0% price.
-  source games = cmd("""
-    curl -fsm 12 'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=en-US&country=US' | jq -c '
-      def free(o; state): [(o // [])[].promotionalOffers[] | select(.discountSetting.discountPercentage == 0)
-        | {state: state, from: (.startDate | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601), until: (.endDate | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)}];
-      [.data.Catalog.searchStore.elements[] | . as $g
-        | (free(.promotions.promotionalOffers; "now") + free(.promotions.upcomingPromotionalOffers; "next"))[]
-        | . + {title: $g.title, url: "https://store.epicgames.com/p/\(($g.catalogNs.mappings // [])[0].pageSlug // $g.productSlug // $g.urlSlug)"}
-      ] | sort_by(.state != "now", .until)'
-  """) every 1h json timeout 20s
+  source feed = http("https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=en-US&country=US") every 1h json timeout 20s
+  let games = feed == null ? null : flatten((feed.data.Catalog.searchStore.elements ?? []).map(g => flatten([
+    flatten((g.promotions.promotionalOffers ?? []).map(o => o.promotionalOffers ?? [])).map(p => merge(p, {state: "now"})),
+    flatten((g.promotions.upcomingPromotionalOffers ?? []).map(o => o.promotionalOffers ?? [])).map(p => merge(p, {state: "next"}))
+  ]).filter(p => p.discountSetting.discountPercentage == 0).map(p => {
+    state: p.state, from: parseTime(p.startDate), until: parseTime(p.endDate), title: g.title,
+    url: "https://store.epicgames.com/p/${g.catalogNs.mappings[0].pageSlug ?? g.productSlug ?? g.urlSlug}"
+  }))).sortBy(g => g.until)
   source now = clock every 60s
   let live = games.filter(g => g.state == "now" && g.until > now)
   let soon = games.filter(g => g.state == "next" && g.from > now)

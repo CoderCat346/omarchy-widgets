@@ -1,5 +1,5 @@
 widget "launches" {
-  meta { description: "A live countdown to the next rocket launch and the ones after it, from The Space Devs"; version: "1.5"; license: "MIT"; category: "world"; owl: 16 }
+  meta { description: "A live countdown to the next rocket launch and the ones after it, from The Space Devs"; version: "1.6"; license: "MIT"; category: "world"; owl: 16 }
 
   // What it says, in the phone's language where it has a set. Rockets, providers, places and status (Go, TBD) come as The Space Devs write them.
   strings {
@@ -13,15 +13,14 @@ widget "launches" {
   size: 6x3
   minSize: 3x2
 
-  requires { pacman: ["curl", "jq"] }
+
 
   // The free Launch Library API allows 15 requests an hour, so this checks hourly.
-  source launches = cmd("""
-    curl -fsm 12 'https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=8&mode=list' | jq -c '[.results[] | {
-      id, name, provider: .lsp_name, where: .location, status: .status.abbrev,
-      at: (.net | fromdateiso8601), url: "https://spacelaunchnow.me/launch/\(.slug)"
-    }]'
-  """) every 1h json timeout 20s
+  source feed = http("https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=8&mode=list") every 1h json timeout 20s
+  let launches = feed == null ? null : (feed.results ?? []).map(l => {
+    id: l.id, name: l.name, provider: l.lsp_name, where: l.location, status: l.status.abbrev,
+    at: parseTime(l.net), url: "https://spacelaunchnow.me/launch/${l.slug}"
+  })
   source now = clock every 1s
   let upcoming = launches.filter(l => l.at > now - 3600)
   let next = upcoming.first()

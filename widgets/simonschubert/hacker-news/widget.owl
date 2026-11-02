@@ -1,17 +1,16 @@
 widget "hacker news" {
-  meta { description: "The Hacker News front page with points and comments; tap a story to read it"; version: "1.1"; license: "MIT"; category: "news" }
+  meta { description: "The Hacker News front page with points and comments; tap a story to read it"; version: "1.2"; license: "MIT"; category: "news"; owl: 16 }
   size: 6x4
   minSize: 4x3
 
-  requires { pacman: ["curl", "jq"] }
 
-  source hn = cmd("""
-    curl -fsm 10 'https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=15' | jq -c '[.hits[] | {
-      id: .objectID, title, points, comments: (.num_comments // 0),
-      url: (.url // "https://news.ycombinator.com/item?id=\(.objectID)"),
-      site: ((.url // "") | sub("^https?://(www\\.)?"; "") | split("/")[0])
-    }]'
-  """) every 15m json timeout 15s
+
+  source feed = http("https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=15") every 15m json timeout 15s
+  let hn = (feed.hits ?? []).map(h => {
+    id: h.objectID, title: h.title, points: h.points, comments: h.num_comments ?? 0,
+    url: h.url ?? "https://news.ycombinator.com/item?id=${h.objectID}",
+    site: split(match(h.url ?? "", "^https?://(?:www[.])?([^/]*)")[0] ?? "", "/")[0]
+  })
 
   onTap: url("https://news.ycombinator.com")
 

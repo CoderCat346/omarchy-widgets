@@ -1,23 +1,34 @@
 widget "releases" {
-  meta { description: "The latest release of each GitHub repository listed in ~/.config/omarchy-proot/releases; new ones stand out"; version: "1.2"; license: "MIT"; category: "dev" }
+  meta { description: "The latest release of up to 8 GitHub repositories you pick; new ones stand out"; version: "1.3"; license: "MIT"; category: "dev"; owl: 16 }
   size: 6x3
   minSize: 3x2
 
-  requires { pacman: ["curl", "jq"] }
+  // owner/repo, at most 8: each is its own request, without a token (GitHub allows 60 an hour).
+  state repos = ["omacom/omarchy", "neovim/neovim", "hyprwm/Hyprland", "jesseduffield/lazygit", "sxyazi/yazi"] persist
+  // Up to 1.2 the list was ~/.config/omarchy-proot/releases, one repo per line. When Linux is there,
+  // that file is read once and taken over; without it, or once taken over, it isn't read again.
+  state migrated = false persist
+  source old = file("~/.config/omarchy-proot/releases") optional
+  on old first {
+    if !migrated {
+      let found = lines(value).map(l => trim(l)).filter(l => l != "" && !startsWith(l, "#") && count(split(l, "/")) == 2)
+      if count(found) > 0 { repos = take(found, 8) }
+      migrated = true
+    }
+  }
 
-  // One owner/repo per line, fetched in parallel without a token (GitHub allows 60 requests an hour).
-  source rel = cmd("""
-    f=~/.config/omarchy-proot/releases
-    mkdir -p "${f%/*}"
-    [ -f "$f" ] || printf 'omacom/omarchy\nneovim/neovim\nhyprwm/Hyprland\njesseduffield/lazygit\nsxyazi/yazi\n' > "$f"
-    {
-      grep -v '^#' "$f" | grep . | while read -r repo; do
-        curl -fsLm 10 "https://api.github.com/repos/$repo/releases/latest" |
-          jq -c --arg repo "$repo" '{repo: $repo, tag: .tag_name, url: .html_url, at: (.published_at | fromdateiso8601)}' &
-      done
-      wait
-    } | jq -sc 'sort_by(-.at)'
-  """) every 1h json timeout 30s
+  source r0 = http(repos[0] == null ? null : "https://api.github.com/repos/${enc(split(repos[0], "/")[0])}/${enc(split(repos[0], "/")[1])}/releases/latest", {Accept: "application/vnd.github+json"}) every 1h json timeout 15s
+  source r1 = http(repos[1] == null ? null : "https://api.github.com/repos/${enc(split(repos[1], "/")[0])}/${enc(split(repos[1], "/")[1])}/releases/latest", {Accept: "application/vnd.github+json"}) every 1h json timeout 15s
+  source r2 = http(repos[2] == null ? null : "https://api.github.com/repos/${enc(split(repos[2], "/")[0])}/${enc(split(repos[2], "/")[1])}/releases/latest", {Accept: "application/vnd.github+json"}) every 1h json timeout 15s
+  source r3 = http(repos[3] == null ? null : "https://api.github.com/repos/${enc(split(repos[3], "/")[0])}/${enc(split(repos[3], "/")[1])}/releases/latest", {Accept: "application/vnd.github+json"}) every 1h json timeout 15s
+  source r4 = http(repos[4] == null ? null : "https://api.github.com/repos/${enc(split(repos[4], "/")[0])}/${enc(split(repos[4], "/")[1])}/releases/latest", {Accept: "application/vnd.github+json"}) every 1h json timeout 15s
+  source r5 = http(repos[5] == null ? null : "https://api.github.com/repos/${enc(split(repos[5], "/")[0])}/${enc(split(repos[5], "/")[1])}/releases/latest", {Accept: "application/vnd.github+json"}) every 1h json timeout 15s
+  source r6 = http(repos[6] == null ? null : "https://api.github.com/repos/${enc(split(repos[6], "/")[0])}/${enc(split(repos[6], "/")[1])}/releases/latest", {Accept: "application/vnd.github+json"}) every 1h json timeout 15s
+  source r7 = http(repos[7] == null ? null : "https://api.github.com/repos/${enc(split(repos[7], "/")[0])}/${enc(split(repos[7], "/")[1])}/releases/latest", {Accept: "application/vnd.github+json"}) every 1h json timeout 15s
+  // A slot whose repo was removed keeps its last answer, so only the listed repos count.
+  let rel = [r0, r1, r2, r3, r4, r5, r6, r7].filter(r => r != null && r.tag_name != null).map(r => {
+    repo: join(take(drop(split(r.html_url ?? "", "/"), 3), 2), "/"), tag: r.tag_name, url: r.html_url, at: parseTime(r.published_at)
+  }).filter(r => any(repos, x => lower(x) == lower(r.repo))).sortBy(r => -r.at)
   source now = clock every 5m
   // A narrow tile (the landscape home screen, or 3 columns) leaves the repo name a few letters
   // beside the tag: put the tag and age on a second line beneath it.
@@ -26,7 +37,7 @@ widget "releases" {
   Column {
     gap: 4
     Row {
-      onTap: terminal('$EDITOR ~/.config/omarchy-proot/releases', "releases")
+      onTap: screen()
       Text { text: "releases"; style: muted; weight: 1 }
       Text { text: "edit"; fontSize: 11; color: muted; width: 40; align: end }
     }
@@ -56,6 +67,24 @@ widget "releases" {
           }
         }
       }
+    }
+  }
+
+  screen {
+    title: "releases"
+    Column {
+      gap: 8
+      Text { text: "owner/repo, up to 8, separated by spaces"; style: label; color: muted }
+      Input {
+        text: join(repos, " ")
+        placeholder: "neovim/neovim sxyazi/yazi"
+        onSubmit: {
+          let next = split(replace(value, ",", " "), " ").map(r => trim(r)).filter(r => count(split(r, "/")) == 2)
+          if count(next) > 0 { repos = take(next, 8) }
+        }
+      }
+      for r in repos { Text { text: r; style: small; color: muted } }
+      Button { text: "close"; onTap: close() }
     }
   }
 }

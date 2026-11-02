@@ -1,5 +1,5 @@
 widget "earthquakes" {
-  meta { description: "Earthquakes of magnitude 4.5 and up worldwide in the last day, from the USGS"; version: "1.4"; license: "MIT"; category: "world"; owl: 16 }
+  meta { description: "Earthquakes of magnitude 4.5 and up worldwide in the last day, from the USGS"; version: "1.5"; license: "MIT"; category: "world"; owl: 16 }
 
   // What it says, in the phone's language where it has a set. Places come as the USGS writes them.
   strings {
@@ -13,13 +13,13 @@ widget "earthquakes" {
   size: 6x3
   minSize: 3x2
 
-  requires { pacman: ["curl", "jq"] }
 
-  source quakes = cmd("""
-    curl -fsm 12 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson' | jq -c '[.features[] | .properties | {
-      mag, place: (.place // "unknown"), at: (.time / 1000 | floor), url, tsunami: (.tsunami == 1)
-    }] | sort_by(-.at)'
-  """) every 10m json timeout 20s
+
+  source feed = http("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson") every 10m json timeout 20s
+  let quakes = feed == null ? null : (feed.features ?? []).map(f => {
+    mag: f.properties.mag, place: f.properties.place ?? "unknown", at: floor(f.properties.time / 1000),
+    url: f.properties.url, tsunami: f.properties.tsunami == 1
+  }).sortBy(q => -q.at)
   source now = clock every 60s
   let strongest = quakes.sortBy(q => -q.mag).first()
 

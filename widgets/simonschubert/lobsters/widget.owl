@@ -1,16 +1,15 @@
 widget "lobsters" {
-  meta { description: "The hottest stories on Lobsters with score, comments and tags; tap a story to read it"; version: "1.1"; license: "MIT"; category: "news" }
+  meta { description: "The hottest stories on Lobsters with score, comments and tags; tap a story to read it"; version: "1.2"; license: "MIT"; category: "news"; owl: 16 }
   size: 6x4
   minSize: 4x3
 
-  requires { pacman: ["curl", "jq"] }
 
-  source hot = cmd("""
-    curl -fsm 10 'https://lobste.rs/hottest.json' | jq -c '.[:20] | [.[] | {
-      id: .short_id, title, score, comments: .comment_count, tags: (.tags | join(" ")),
-      url: (if .url == "" then .comments_url else .url end), discussion: .comments_url
-    }]'
-  """) every 15m json timeout 15s
+
+  source feed = http("https://lobste.rs/hottest.json") every 15m json timeout 15s
+  let hot = take(feed ?? [], 20).map(s => {
+    id: s.short_id, title: s.title, score: s.score, comments: s.comment_count, tags: join(s.tags ?? [], " "),
+    url: s.url == "" ? s.comments_url : s.url, discussion: s.comments_url
+  })
 
   onTap: url("https://lobste.rs")
 
