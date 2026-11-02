@@ -2,7 +2,7 @@ widget "next bus" {
   size: 6x2
   minSize: 4x2
   requires { pacman: [] }
-  meta { description: "Your next bus, tram or train, live, and whether you need to run for it: pick a stop, a line and how long you walk there, anywhere Transitous has open timetables. Tap the tile to change them"; version: "1.4"; license: "MIT"; category: "world"; owl: 16 }
+  meta { description: "Your next bus, tram or train, live, and whether you need to run for it: pick a stop, a line and how long you walk there, anywhere Transitous has open timetables. Tap the tile to change them"; version: "1.5"; license: "MIT"; category: "world"; owl: 17 }
 
   // What it says, in the phone's language where it has a set. Stops, lines and directions come as Transitous
   // names them. leaveNow and run sit in a 170dp column at 22 and 26sp: about 12 letters at most.
@@ -312,6 +312,7 @@ widget "next bus" {
     title: str.title
     Column {
       scroll: true
+      onPull: refresh()
       gap: 8
       Text { text: stopName == "" ? str.yourStop : stopName; style: label; color: muted }
       Input { placeholder: stopName == "" ? str.search : str.change; clear: true; onSubmit: { query = value; refresh() } }

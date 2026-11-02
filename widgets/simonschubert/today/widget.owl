@@ -1,7 +1,7 @@
 widget "today" {
   size: 3x3
   minSize: 2x2
-  meta { description: "The date and the weather where you are, by IP or a city you type. Tap it for the next 24 hours, three days, wind, UV, sun and moon. Tap °C or °F to switch"; version: "1.9"; license: "MIT"; category: "world"; owl: 16 }
+  meta { description: "The date and the weather where you are, by IP or a city you type. Tap it for the next 24 hours, three days, wind, UV, sun and moon. Tap °C or °F to switch"; version: "1.10"; license: "MIT"; category: "world"; owl: 17 }
 
   // What it says, in the phone's language where it has a set. wttr names the sky and the moon in English, and
   // its own Indonesian misses newer conditions, so other languages name them from wttr's codes.
@@ -353,6 +353,7 @@ widget "today" {
     } else {
       Column {
         scroll: true
+        onPull: refresh()
         gap: 14
         // Now.
         Row {

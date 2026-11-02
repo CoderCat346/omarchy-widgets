@@ -1,7 +1,7 @@
 widget "what's new" {
   size: 3x2
   minSize: 2x2
-  meta { description: "What's new in the launcher, from its changelog on GitHub. Tap it for every release"; version: "1.5"; license: "MIT"; category: "news"; owl: 16 }
+  meta { description: "What's new in the launcher, from its changelog on GitHub. Tap it for every release"; version: "1.6"; license: "MIT"; category: "news"; owl: 17 }
 
   // What it says, in the phone's language where it has a set. The changelog itself is in English.
   strings {
@@ -74,6 +74,7 @@ widget "what's new" {
       Column {
         Column {
           scroll: true
+          onPull: refresh()
           gap: 18
           weight: 1
           for r in releases key r.version {

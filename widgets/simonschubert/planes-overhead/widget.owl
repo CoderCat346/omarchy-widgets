@@ -1,5 +1,5 @@
 widget "planes overhead" {
-  meta { description: "Aircraft around you on a live radar, from the OpenSky Network, located by IP or a city you type, via wttr.in. Tap it for every flight's altitude, speed and distance"; version: "1.4"; license: "MIT"; category: "world"; owl: 16 }
+  meta { description: "Aircraft around you on a live radar, from the OpenSky Network, located by IP or a city you type, via wttr.in. Tap it for every flight's altitude, speed and distance"; version: "1.5"; license: "MIT"; category: "world"; owl: 17 }
 
   // What it says, in the phone's language where it has a set. Callsigns and OpenSky's country names stay as they come.
   strings {
@@ -173,6 +173,7 @@ widget "planes overhead" {
     }
     Column {
       scroll: true
+      onPull: refresh()
       gap: 10
       Radar { list: flights; labels: true; height: min(screenWidth - 32, screenHeight * 0.55); fill: width }
       Text {

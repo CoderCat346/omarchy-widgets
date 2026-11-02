@@ -1,8 +1,8 @@
 widget "ifsc" {
   meta {
-    owl: 5
+    owl: 17
     description: "IFSC Climbing World Cup: the next event with a countdown, the latest podiums, live results and the cup standings for boulder, lead and speed. Tap for everything"
-    version: "1.0"
+    version: "1.1"
     license: "MIT"
     category: "sport"
   }
@@ -225,6 +225,7 @@ widget "ifsc" {
       Column {
         weight: 1
         scroll: true
+        onPull: refresh()
         gap: 6
 
         if tab == "results" {

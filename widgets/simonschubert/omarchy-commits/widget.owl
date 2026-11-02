@@ -2,7 +2,7 @@ widget "omarchy" {
   size: 4x3
   minSize: 3x3
   requires { pacman: [] }
-  meta { description: "Latest commits on omacom/omarchy, branch quattro. Tap the tile for the full feed, then a commit to open it."; version: "1.3"; license: "MIT"; category: "dev"; owl: 16 }
+  meta { description: "Latest commits on omacom/omarchy, branch quattro. Tap the tile for the full feed, then a commit to open it."; version: "1.4"; license: "MIT"; category: "dev"; owl: 17 }
 
   // What it says, in the phone's language where it has a set. Commits and the branch come as GitHub has them.
   strings {
@@ -125,6 +125,7 @@ widget "omarchy" {
     title: "omarchy"
     Column {
       scroll: true
+      onPull: refresh()
       gap: 4
       Row {
         align: center

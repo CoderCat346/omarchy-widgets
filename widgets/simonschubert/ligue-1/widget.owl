@@ -1,8 +1,8 @@
 widget "ligue-1" {
   meta {
-    owl: 16
+    owl: 17
     description: "Ligue 1 results, live scores and kick-offs from ESPN with club crests, and the table with European and relegation places. Tap for every match"
-    version: "1.4"
+    version: "1.5"
     license: "MIT"
     category: "sport"
   }
@@ -173,6 +173,7 @@ widget "ligue-1" {
     title: "Ligue 1"
     Column {
       scroll: true
+      onPull: refresh()
       Text { text: str.matches; style: title }
       if count(all) == 0 { Text { text: str.none; style: small; color: muted } }
       for g in all key g.id { GameRow { g: g; wide: screenWide } }

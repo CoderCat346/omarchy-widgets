@@ -2,7 +2,7 @@ widget "departures" {
   size: 3x2
   minSize: 2x1
   requires { pacman: [] }
-  meta { description: "Live departures from a stop you pick, anywhere Transitous has open timetables: line, direction, platform and minutes to go, with delays. Tap the tile for the full board or to change the stop"; version: "1.6"; license: "MIT"; category: "world"; owl: 16 }
+  meta { description: "Live departures from a stop you pick, anywhere Transitous has open timetables: line, direction, platform and minutes to go, with delays. Tap the tile for the full board or to change the stop"; version: "1.7"; license: "MIT"; category: "world"; owl: 17 }
 
   // What it says, in the phone's language where it has a set. Stops, lines, directions and modes come as Transitous names them.
   strings {
@@ -192,6 +192,7 @@ widget "departures" {
     title: displayName == "" ? str.title : displayName
     Column {
       scroll: true
+      onPull: refresh()
       gap: 8
       Input { placeholder: stopName == "" ? str.search : str.change; clear: true; onSubmit: { query = value; refresh() } }
       if len(recent) > 0 {

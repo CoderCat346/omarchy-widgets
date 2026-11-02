@@ -1,8 +1,8 @@
 widget "mlb" {
   meta {
-    owl: 5
+    owl: 17
     description: "MLB scores from ESPN with team logos: live games first, then last night's finals and today's first pitches. Tap for every game and both league standings"
-    version: "1.2"
+    version: "1.3"
     license: "MIT"
     category: "sport"
   }
@@ -165,6 +165,7 @@ widget "mlb" {
     title: "MLB"
     Column {
       scroll: true
+      onPull: refresh()
       Text { text: "scores"; style: title }
       if count(all) == 0 { Text { text: "no games today"; style: small; color: muted } }
       for g in all key g.id { GameRow { g: g } }
