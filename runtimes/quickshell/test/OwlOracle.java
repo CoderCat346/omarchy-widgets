@@ -23,7 +23,7 @@ public class OwlOracle {
   }
 
   static final Host HOST = new Host() {
-    final Budget budget = new Budget(200000);
+    final Budget budget = new Budget(200000, 1_000_000_000L);
     public Budget getBudget() { return budget; }
     public Value read(int slot) {
       if (cache[slot] != null) return cache[slot];
