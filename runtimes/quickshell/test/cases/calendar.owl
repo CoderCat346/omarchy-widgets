@@ -1,0 +1,9 @@
+widget "x" {
+  meta { owl: 18 }
+  source cal = android.calendar
+  Column {
+    for e in cal.events ?? [] { Button { text: e.title; onTap: calendar("open", e) } }
+    Button { text: "today"; onTap: calendar("open") }
+    if !cal.granted { Button { text: "allow"; onTap: calendar("request") } }
+  }
+}

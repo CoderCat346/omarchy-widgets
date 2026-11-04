@@ -53,7 +53,7 @@ function wants(node, axis, hug) {
   if (fixedWidth(p) >= 0 && axis === "w") return false
   if (fixedHeight(p) >= 0 && axis === "h") return false
   var k = node.kind
-  if (k === "Canvas" || k === "Shader" || k === "Terminal") return !sized(p)
+  if (k === "Canvas" || k === "Shader" || k === "Terminal" || k === "Browser") return !sized(p)
   if (axis === "h") {
     if (k === "Column" || k === "Row" || k === "Box" || k === "Flow")
       return (node.c || []).some(function(c) {

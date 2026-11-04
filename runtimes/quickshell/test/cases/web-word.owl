@@ -1,0 +1,7 @@
+widget "x" {
+  meta { owl: 18 }
+  Column {
+    Button { text: "a"; onTap: web("home") }
+    Browser { url: "https://example.com/" }
+  }
+}

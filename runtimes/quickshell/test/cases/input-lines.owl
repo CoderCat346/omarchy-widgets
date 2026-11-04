@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 18 }
+  state t = ""
+  Input { text: t; lines: 4; onChange: t = value }
+}

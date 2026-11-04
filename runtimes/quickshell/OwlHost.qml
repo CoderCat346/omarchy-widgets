@@ -133,6 +133,16 @@ QtObject {
     // Only start and toggle would listen; stop and cancel have nothing to turn off.
     case "speech":
       return s(0) === "start" || s(0) === "toggle" ? widget.report("speech(...) dictates through the phone's speech recognizer, which this shell does not have") : undefined
+    // owl 18: a Browser here is a link to its page, with no history to go back in or page to reload.
+    case "web":
+      return
+    // Nothing here to ask for, and no AirPods link; what a widget reads stays not allowed, so asking says why.
+    case "location":
+      return widget.report("location(\"request\") asks for the phone's location, which this shell does not have")
+    case "calendar":
+      return widget.report("calendar(\"" + s(0) + "\") " + (s(0) === "open" ? "opens the phone's calendar app" : "asks to read the phone's calendars") + ", which this shell does not have")
+    case "airpods":
+      return s(0) === "request" ? widget.report("airpods(\"request\") asks for Bluetooth to link to AirPods, which this shell does not have") : undefined
     case "launcher":
       return widget.report("launcher(\"" + s(0) + "\") opens the Android launcher's own screens; this shell has none")
     // No share sheet here: the text goes to the clipboard, which is where it would end up.

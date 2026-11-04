@@ -12,7 +12,8 @@ pragma ComponentBehavior: Bound
 //                    device/system/volume/modes/network command from the OwlHost;
 //                    alarm is never set, as Linux keeps no next alarm, there's
 //                    no SIM, no key bar holds a modifier, power reads nothing
-//                    and speech never listens
+//                    and speech never listens; location, calendar and AirPods
+//                    are never allowed, as nothing here asks
 //   ws("...")        not connected here: it stays null, and send(...) goes nowhere
 //
 // `status` sources (cmd and http) get {out, err, code, ok}, as the language
@@ -264,6 +265,13 @@ Item {
   readonly property var noPower: ({ current: null, currentAvg: null, watts: null, charge: null, chargeTime: null, maxCurrent: null, maxVoltage: null })
   // No speech recognizer on a desktop, so speech(...) never listens (owl 15).
   readonly property var noSpeech: ({ available: false, listening: false, text: "", final: null, error: null })
+  // Nothing here asks for the location, the calendars or Bluetooth, so they stay not allowed (owl 18): a widget shows
+  // its fallback, a typed city, no events, and AirPods a desktop can't link to.
+  readonly property var noLocation: ({ granted: false, available: false, lat: null, lon: null, accuracy: null, time: null })
+  readonly property var noCalendar: ({ granted: false, events: [] })
+  readonly property var noAirpods: ({ supported: false, granted: false, connected: false, name: null, model: null, modelNumber: null,
+    left: null, right: null, "case": null, headset: null, mode: null, modes: [], adaptiveLevel: null, conversation: null, speaking: null,
+    oneBud: null, earDetection: null })
 
   // The sources that are pushed rather than polled, as they start.
   function pushNow() {
@@ -279,6 +287,9 @@ Item {
     if (root.kind === "android.modifiers") root.widget.sourceObject(root.spec.slot, root.noModifiers)
     if (root.kind === "android.power") root.widget.sourceObject(root.spec.slot, root.noPower)
     if (root.kind === "android.speech") root.widget.sourceObject(root.spec.slot, root.noSpeech)
+    if (root.kind === "android.location") root.widget.sourceObject(root.spec.slot, root.noLocation)
+    if (root.kind === "android.calendar") root.widget.sourceObject(root.spec.slot, root.noCalendar)
+    if (root.kind === "android.airpods") root.widget.sourceObject(root.spec.slot, root.noAirpods)
     if (root.kind === "android.media") root.widget.sourceObject(root.spec.slot, root.media)
   }
   onActiveChanged: root.pushNow()

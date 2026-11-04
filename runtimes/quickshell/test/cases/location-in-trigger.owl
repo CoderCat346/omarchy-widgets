@@ -1,0 +1,6 @@
+widget "x" {
+  meta { owl: 18 }
+  source here = android.location
+  every 60s { location("request") }
+  Text { text: "${here.lat}" }
+}

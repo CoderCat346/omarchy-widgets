@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 18 }
+  source cal = android.calendar
+  Button { text: "a"; onTap: calendar("request", 1) }
+}

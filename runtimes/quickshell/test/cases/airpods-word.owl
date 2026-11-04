@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 18 }
+  source pods = android.airpods
+  Button { text: "a"; onTap: airpods("loud") }
+}

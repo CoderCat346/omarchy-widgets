@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 18 }
+  source here = android.location
+  Button { text: here.granted ? "${here.lat}" : "allow"; onTap: location("request") }
+}

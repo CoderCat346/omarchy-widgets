@@ -118,6 +118,16 @@ Where it differs, because Android is not here:
 - **strings** and `lang()` take the language of Qt's locale, as the launcher
   takes the phone's.
 - **onPull** never runs: a desktop list is scrolled, not pulled.
+- **Browser** has no web view here: the tile names its page, and a click opens
+  it in the desktop's browser. `web(...)` does nothing, and `onNavigate`,
+  `onTitle` and `onProgress` never run. **lock:** is taken and does nothing:
+  there are no home pages to swipe.
+- **android.location**, **android.calendar** and **android.airpods** are never
+  allowed, `granted` false (AirPods' `supported` false too), so a widget shows
+  what it shows before you allow them; `location("request")`,
+  `calendar(...)` and `airpods("request")` report that there's nothing to ask.
+- **Input**'s `lines` wraps and grows up to that many lines, then scrolls;
+  Enter submits when it has `onSubmit`, Shift+Enter starts a new line.
 - `gapsIn`, `gapsOut` and `borderWidth` are the OwlHost's, Omarchy's Hyprland
   gaps and borders by default, and `tileOpacity` 1 and `tileFrost` 0.
 - **lazy** Columns and Grids scroll, but build every row: the launcher's lazy

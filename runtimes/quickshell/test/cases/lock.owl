@@ -1,0 +1,6 @@
+widget "x" {
+  meta { owl: 18 }
+  state playing = false
+  lock: playing
+  Button { text: "play"; onTap: playing = !playing }
+}

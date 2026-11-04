@@ -1,0 +1,4 @@
+widget "x" {
+  meta { owl: 18 }
+  for u in ["a"] { Browser { url: "https://example.com/" } }
+}

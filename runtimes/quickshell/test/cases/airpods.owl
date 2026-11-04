@@ -1,0 +1,10 @@
+widget "x" {
+  meta { owl: 18 }
+  source pods = android.airpods
+  Column {
+    Button { text: pods.mode; onTap: airpods("next") }
+    Button { text: "allow"; onTap: airpods("request") }
+    Button { text: "conv"; onTap: airpods("conversation", true) }
+    Button { text: "level"; onTap: airpods("adaptiveLevel", 50) }
+  }
+}

@@ -1,0 +1,6 @@
+face "x" {
+  meta { owl: 17 }
+  state playing = false
+  lock: playing
+  Text { text: "a" }
+}

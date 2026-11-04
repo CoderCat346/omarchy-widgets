@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 18 }
+  state open = false
+  Browser { url: open ? "https://example.com/" : null }
+}

@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 18 }
+  component Page() { Browser { url: "https://example.com/" } }
+  Page { }
+}

@@ -1,0 +1,9 @@
+widget "x" {
+  meta { owl: 18 }
+  state q = "owl"
+  state title = ""
+  Column {
+    Button { text: title; onTap: web("back") }
+    Browser { url: "https://example.com/search?q=${enc(q)}"; onTitle: title = value; onNavigate: q = "x"; onProgress: title = "${value}" }
+  }
+}

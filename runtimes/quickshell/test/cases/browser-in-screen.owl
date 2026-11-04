@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 18 }
+  Button { text: "a"; onTap: screen() }
+  screen { Browser { url: "https://example.com/" } }
+}

@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 18 }
+  state t = ""
+  Text { text: t; onTitle: t = value }
+}

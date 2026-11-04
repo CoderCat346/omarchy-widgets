@@ -1,0 +1,4 @@
+widget "x" {
+  meta { owl: 17 }
+  Browser { url: "https://example.com/" }
+}

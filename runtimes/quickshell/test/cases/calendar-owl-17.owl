@@ -1,0 +1,4 @@
+widget "x" {
+  meta { owl: 17 }
+  Button { text: "a"; onTap: calendar("open") }
+}

@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 17 }
+  source here = android.location
+  Text { text: "${here.lat}" }
+}

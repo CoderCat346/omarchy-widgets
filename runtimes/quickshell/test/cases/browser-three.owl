@@ -1,0 +1,8 @@
+face "x" {
+  meta { owl: 18 }
+  Column {
+    Browser { url: "https://a.example.com/" }
+    Browser { url: "https://b.example.com/" }
+    Browser { url: "https://c.example.com/" }
+  }
+}

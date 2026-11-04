@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 18 }
+  state q = "owl"
+  Browser { url: "https://example.com/?q=${q}" }
+}

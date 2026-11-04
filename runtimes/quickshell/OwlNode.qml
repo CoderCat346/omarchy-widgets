@@ -160,7 +160,8 @@ Item {
       case "Shader": return shaderC
       case "Terminal": return terminalC
       case "Slider": return sliderC
-      case "Input": return inputC
+      case "Input": return L.num(root.p.lines, 1) > 1 ? inputLinesC : inputC
+      case "Browser": return browserC
       case "Popup": return popupC
       default: return null
       }
@@ -937,6 +938,102 @@ Item {
           color: root.widget ? root.widget.ink("muted") : "grey"
           font: field.font
         }
+      }
+    }
+  }
+
+  // Input with lines (owl 18): wraps what's typed and grows with it up to that
+  // many lines, then scrolls. Enter submits when it has onSubmit, as a
+  // keyboard's Enter does in the launcher; Shift+Enter, or Enter without
+  // onSubmit, starts a new line.
+  Component {
+    id: inputLinesC
+    Rectangle {
+      id: box
+      readonly property int maxLines: Math.max(1, Math.round(L.num(root.p.lines, 1)))
+      implicitWidth: 120 * root.dp
+      implicitHeight: Math.min(area.contentHeight, area.lineHeight * box.maxLines) + 12 * root.dp
+      radius: 6 * root.dp
+      color: "transparent"
+      border.width: root.p.underline === false ? 0 : Math.max(1, root.dp)
+      border.color: root.widget ? root.widget.alpha(root.widget.ink("foreground"), area.activeFocus ? 0.5 : 0.2) : "grey"
+      Flickable {
+        id: flick
+        anchors.fill: parent
+        anchors.margins: 6 * root.dp
+        clip: true
+        contentWidth: width
+        contentHeight: area.contentHeight
+        boundsBehavior: Flickable.StopAtBounds
+        // Keeps the cursor in view as the text grows past the lines shown.
+        function follow(r) {
+          if (r.y < contentY) contentY = r.y
+          else if (r.y + r.height > contentY + height) contentY = r.y + r.height - height
+        }
+        TextEdit {
+          id: area
+          width: flick.width
+          readonly property real lineHeight: area.lineCount > 0 ? area.contentHeight / area.lineCount : area.font.pixelSize * 1.3
+          wrapMode: TextEdit.Wrap
+          color: root.p.color || (root.widget ? root.widget.ink("foreground") : "white")
+          font.pixelSize: L.num(root.p.fontSize, 14) * root.dp
+          font.family: root.family("sans")
+          text: root.p.text === undefined || root.p.text === null || root.p.text === "…" ? "" : String(root.p.text)
+          onCursorRectangleChanged: flick.follow(cursorRectangle)
+          // TextEdit has no textEdited: only while it has focus is a change typed rather than set from the widget.
+          onTextChanged: if (area.activeFocus && root.handlers.onChange) root.handlers.onChange(area.text)
+          Component.onCompleted: if (root.p.focus === true) forceActiveFocus()
+          Keys.onPressed: function(event) {
+            if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier) && root.handlers.onSubmit) {
+              root.handlers.onSubmit(area.text)
+              if (root.p.clear === true) area.text = ""
+              event.accepted = true
+            }
+          }
+          Text {
+            anchors.fill: parent
+            visible: area.text === ""
+            text: root.p.placeholder || ""
+            color: root.widget ? root.widget.ink("muted") : "grey"
+            font: area.font
+            wrapMode: Text.Wrap
+          }
+        }
+      }
+    }
+  }
+
+  // Browser (owl 18): a page from the web, which the launcher shows in a web
+  // view in the tile. This shell has no web view, so the tile names the page,
+  // and a click opens it in the desktop's browser. web(...) does nothing here,
+  // and onNavigate, onTitle and onProgress never run.
+  Component {
+    id: browserC
+    Rectangle {
+      readonly property string url: root.p.url === undefined || root.p.url === null || root.p.url === "…" ? "" : String(root.p.url)
+      implicitWidth: 160 * root.dp
+      implicitHeight: 120 * root.dp
+      radius: 6 * root.dp
+      color: root.widget ? root.widget.alpha(root.widget.ink("foreground"), 0.06) : "transparent"
+      border.width: Math.max(1, root.dp)
+      border.color: root.widget ? root.widget.alpha(root.widget.ink("foreground"), 0.2) : "grey"
+      Text {
+        anchors.fill: parent
+        anchors.margins: 8 * root.dp
+        horizontalAlignment: Text.AlignHCenter
+        verticalAlignment: Text.AlignVCenter
+        wrapMode: Text.WrapAnywhere
+        elide: Text.ElideRight
+        text: parent.url === "" ? "" : parent.url.replace(/^https:\/\//, "")
+        color: root.widget ? root.widget.ink("muted") : "grey"
+        font.pixelSize: 12 * root.dp
+        font.family: root.family("sans")
+      }
+      MouseArea {
+        anchors.fill: parent
+        enabled: parent.url !== ""
+        cursorShape: Qt.PointingHandCursor
+        onClicked: if (root.widget) root.widget.act("url", [parent.url])
       }
     }
   }

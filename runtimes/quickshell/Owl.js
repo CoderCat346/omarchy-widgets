@@ -1075,7 +1075,8 @@ var ACTIONS = {
   media: [1, 1], androidApp: [1, 1], copy: [1, 1], notify: [1, 2], volume: [1, 2],
   notification: [1, 3], screen: [0, 0], close: [0, 0], torch: [1, 1], dnd: [1, 1], share: [1, 1], haptic: [0, 0], sound: [1, 1],
   open: [1, 1], ask: [1, 2], appAction: [2, 2], workApps: [1, 1], shortcuts: [1, 1], send: [2, 2],
-  pressKey: [1, 1], typeText: [1, 1], latch: [1, 2], settings: [1, 1], pickImages: [0, 0], speech: [1, 1]
+  pressKey: [1, 1], typeText: [1, 1], latch: [1, 2], settings: [1, 1], pickImages: [0, 0], speech: [1, 1],
+  web: [1, 1], location: [1, 1], airpods: [1, 2], calendar: [1, 2]
 }
 
 function Args(args, host) {
@@ -2634,12 +2635,19 @@ var OPERATORS = {
 
 // ---------------------------------------------------------------- compiler
 
-var LEVEL = 17
+var LEVEL = 18
 var MAX_NODES = 500
 var MAX_SCREEN_NODES = 1000
 var MAX_ASSET_BYTES = 2097152
 // Pages as far out as a file can ask for; past Int's range, the pages either side of them would wrap.
 var MAX_PAGE = 1000
+// Each Browser is a web view of its own: a tile has room for two.
+var MAX_BROWSERS = 2
+// How many ways a URL may turn out and still be listed for review, one line each.
+var MAX_SHAPES = 8
+// A value in a URL's shape, put through enc(), and a number.
+var SHAPE_VALUE = "\u2039value\u203a"
+var SHAPE_NUMBER = "\u2039number\u203a"
 
 var KINDS = {
   Column: [["gap", "align", "justify", "scroll", "lazy", "reverse"], "ui"],
@@ -2657,8 +2665,10 @@ var KINDS = {
   Shader: [["code", "uniforms", "fallback"], "none"],
   Spacer: [[], "none"],
   Terminal: [["command", "fontSize"], "none"],
+  // owl 18: a live page from the web, another surface in the tile beside it.
+  Browser: [["url", "js", "zoom"], "none"],
   Slider: [["value", "min", "max", "step", "color", "track", "live"], "none"],
-  Input: [["text", "placeholder", "color", "fontSize", "clear", "focus", "underline", "password"], "none"],
+  Input: [["text", "placeholder", "color", "fontSize", "clear", "focus", "underline", "password", "lines"], "none"],
   // owl 10: a menu over everything else, next to the node that holds it.
   Popup: [["position", "gap", "align"], "ui"]
 }
@@ -2770,6 +2780,13 @@ var ON_EACH = "on … each"
 // owl 17: a list pulled down past its top, to fetch again; servers with a certificate of their own, pinned;
 // WebSockets, and a trigger for each of their messages.
 ;["onPull", HTTP_PIN, "ws", "send", ON_EACH].forEach(function(k) { SINCE[k] = 17 })
+// A widget's or a face's `lock:`, named like this in SINCE.
+var HOME_LOCK = "lock"
+// owl 18: a field that wraps what's typed and grows with it; holding the home screen still while the widget is
+// used; a web page in the tile and the taps that steer it; where the phone roughly is, AirPods, and the calendars'
+// events, each once a tap has asked for it.
+;["Input.lines", HOME_LOCK, "Browser", "web", "android.location", "location", "android.airpods", "airpods",
+  "android.calendar", "calendar"].forEach(function(k) { SINCE[k] = 18 })
 // The name a widget reads its strings { } by: str.feels.
 var STRINGS = "str"
 
@@ -2791,11 +2808,24 @@ var HANDLER_PARAMS = { onTap: ["x", "y"], onLongPress: ["x", "y"],
   onPull: [],
   onChange: ["value"], onSubmit: ["value"], onDismiss: [],
   // A panel's, at its top: a key pressed in the prompt bar while it's open.
-  onKey: ["value"] }
-var HANDLER_KINDS = { onChange: ["Slider", "Input"], onSubmit: ["Input"], onDismiss: ["Popup"], onPull: ["Column", "Grid"] }
+  onKey: ["value"],
+  // owl 18: the page a Browser went to, its title, and how far it has loaded.
+  onNavigate: ["value"], onTitle: ["value"], onProgress: ["value"] }
+var HANDLER_KINDS = { onChange: ["Slider", "Input"], onSubmit: ["Input"], onDismiss: ["Popup"], onPull: ["Column", "Grid"],
+  // owl 18: only a Browser has a page to report on.
+  onNavigate: ["Browser"], onTitle: ["Browser"], onProgress: ["Browser"] }
 var TRIGGER_PARAMS = { on: ["value", "old"] }
 var ANDROID = ["battery", "device", "media", "notifications", "volume", "system", "network", "power", "sim", "alarm", "modes",
-  "apps", "agents", "recent", "drawer", "modifiers", "speech"]
+  "apps", "agents", "recent", "drawer", "modifiers", "speech", "location", "airpods", "calendar"]
+// The android sources a widget asks Android's permission for, each with x("request") from a tap: never a press,
+// before the finger lifts, or a trigger, so a widget can't ask on its own.
+var ASKS = ["location", "calendar", "airpods"]
+// What the store's review lists for a widget that reads or changes AirPods, from the source or airpods(...).
+var AIRPODS_COMMAND = "read and change the AirPods connected to the phone over Bluetooth, once you allow it"
+// AirPods' listening modes, as android.airpods' `mode` and `modes` name them.
+var AIRPODS_MODES = ["off", "anc", "transparency", "adaptive"]
+// Builtins that always give a number (or null): a number in a URL needs no enc().
+var NUMBERS = ["int", "round", "floor", "ceil", "abs", "fixed", "len", "count", "sum", "min", "max", "clamp"]
 // speech(...)'s words that work from anywhere, a trigger or a press too: they only turn the microphone off.
 var SPEECH_ANYWHERE = ["stop", "cancel"]
 // The words an action's first value may be, when it's written out; `numbers` also allows a number. `forms` are
@@ -2830,7 +2860,24 @@ var ACTION_WORDS = {
   appAction: words(["pin", "info", "uninstall", "remove", "edit", "share"], "appAction takes pin, info, uninstall, remove, edit, share and an app's key"),
   workApps: words(["pause", "resume", "toggle"], "workApps takes pause, resume, toggle"),
   speech: words(["start", "stop", "toggle", "cancel"], "speech takes start, stop, toggle, cancel; what's heard is in source x = android.speech"),
-  latch: words(LATCHES, "latch takes ctrl, alt, shift, and optionally once, locked or off")
+  latch: words(LATCHES, "latch takes ctrl, alt, shift, and optionally once, locked or off"),
+  location: words(["request"], "location takes request; where the phone is is in source x = android.location"),
+  calendar: words(["request", "open"], "calendar takes request or open; the events are in source x = android.calendar", false, {
+    request: [1, 1, "calendar(\"request\")"],
+    open: [1, 2, "calendar(\"open\"), or calendar(\"open\", event)"]
+  }),
+  // owl 18: where a Browser goes, or how it loads where it is.
+  web: words(["back", "forward", "reload", "stop"], "web takes back, forward, reload, stop"),
+  // A listening mode, the next one, or a setting: on and off ones turn over without a value.
+  airpods: words(AIRPODS_MODES.concat(["next", "request", "connect", "conversation", "oneBud", "earDetection", "adaptiveLevel"]),
+    "airpods takes " + AIRPODS_MODES.join(", ") + ", next, request, connect, conversation, oneBud, earDetection or adaptiveLevel", false,
+    (function() {
+      var f = {}
+      AIRPODS_MODES.concat(["next", "request", "connect"]).forEach(function(w) { f[w] = [1, 1, "airpods(\"" + w + "\")"] })
+      ;["conversation", "oneBud", "earDetection"].forEach(function(w) { f[w] = [1, 2, "airpods(\"" + w + "\"), or airpods(\"" + w + "\", on)"] })
+      f.adaptiveLevel = [2, 2, "airpods(\"adaptiveLevel\", level)"]
+      return f
+    })())
 }
 // volume(...)'s second value; media without one.
 var VOLUME_STREAMS = ["media", "ring", "notification", "alarm"]
@@ -2898,9 +2945,9 @@ function javaSetOrder(names) {
 }
 var TILE = ["cols", "rows", "tileWidth", "tileHeight", "screenWidth", "screenHeight", "screenInset", "screenTop", "screenLeft", "screenRight",
   "corners", "gapsIn", "gapsOut", "borderWidth", "tileOpacity", "tileFrost"]
-var WIDGET_PROPS = ["size", "minSize", "page", "order", "padding", "background"]
+var WIDGET_PROPS = ["size", "minSize", "page", "order", "padding", "background", "lock"]
 // A face has no tile's size; it says where it goes and whether the status bar stays over it.
-var FACE_PROPS = ["page", "order", "padding", "background", "statusBar", "edge"]
+var FACE_PROPS = ["page", "order", "padding", "background", "statusBar", "edge", "lock"]
 
 // An evaluator: `c` is set when the value is known at compile time.
 function Ev(f, constant, hasConst) {
@@ -2986,6 +3033,14 @@ function Compiler(ast, language) {
   this.guest = false
   this.animated = false
   this.terminal = false
+  this.browser = false
+  // Browsers so far, against MAX_BROWSERS.
+  this.browsers = 0
+  // Where the first web(...) is, checked against browser once every node is compiled.
+  this.webAt = null
+  // Inside a `for` or a component's body: what's written there once is drawn as many times as it's used, every
+  // copy the same node. A Browser can't go there: its page belongs to the node, so the copies would close each other's.
+  this.repeated = 0
   this.nodes = 0
   this.maxNodes = MAX_NODES
   this.screenAction = null
@@ -3243,6 +3298,14 @@ Compiler.prototype = {
     }
     // Whether the status bar stays over a face, read as it changes: a face can hide it for a game and bring it back.
     var statusBar = props.statusBar ? this.ex(props.statusBar.value, this.root) : null
+    // Whether the home screen holds still around the tile, read as it changes: a game holds it while it's played. A
+    // constant would hold it whenever the page shows, so it has to be something that changes, like a state.
+    var lock = null
+    if (props.lock) {
+      this.since(HOME_LOCK, props.lock.pos)
+      lock = this.ex(props.lock.value, this.root)
+      if (lock.k) this.fail("lock holds the home screen still while what it says is true, so it's something that changes, like lock: playing, not a fixed value", props.lock.pos)
+    }
     // Drawn under the status bar and a camera cutout: fixed in the file, since the whole face moves when it changes.
     var edge = false
     if (props.edge) {
@@ -3252,6 +3315,8 @@ Compiler.prototype = {
     }
     if (this.needs && level < this.needs[0])
       this.fail(this.needs[1] + " needs owl " + this.needs[0] + ": add meta { owl: " + this.needs[0] + " }", this.needs[2])
+    if (this.webAt !== null && !this.browser)
+      this.fail("web(...) steers this file's Browser, and it has none: add Browser { url: \"https://host/page\" }", this.webAt)
     var padding = 12
     if (props.padding) {
       var pv = num(this.constant(props.padding.value, "padding"))
@@ -3265,6 +3330,7 @@ Compiler.prototype = {
       minSize: props.minSize ? this.cells(props.minSize) : [1, 1],
       isFace: this.isFace,
       statusBar: statusBar,
+      lock: lock,
       edge: edge,
       kind: this.ast.kind,
       // A face goes left of page 1 by default: 0, and -1, -2, ... further left. A tile never does.
@@ -3284,6 +3350,7 @@ Compiler.prototype = {
       needsLinux: this.guest || Object.keys(requires).length > 0,
       animated: this.animated,
       terminal: this.terminal,
+      browser: this.browser,
       nodeCount: tileNodes
     }
   },
@@ -3424,6 +3491,9 @@ Compiler.prototype = {
       if (e.name === "recent") this.commands.push("read the recently opened apps")
       if (e.name === "drawer") this.commands.push("read the launcher's apps (names and icons)")
       if (e.name === "speech") this.commands.push("listen through the microphone after a tap, and read what you say")
+      if (e.name === "location") this.commands.push("read the phone's approximate location, once you allow it")
+      if (e.name === "calendar") this.commands.push("read events in the phone's calendars, once you allow it")
+      if (e.name === "airpods") this.commands.push(AIRPODS_COMMAND)
       src.kind = "android." + e.name
       src.every = Math.max(every === null ? 60 : every, 1)
       src.timeout = 0
@@ -3589,7 +3659,12 @@ Compiler.prototype = {
     var names = d.params.map(function(p) { return p[0] })
     var scope = new Scope(this.root, names)
     var defaults = d.params.map(function(p) { return p[1] ? self.ex(p[1], self.root) : null })
-    return { params: names, defaults: defaults, body: this.items(body.items, scope, "ui") }
+    this.repeated++
+    try {
+      return { params: names, defaults: defaults, body: this.items(body.items, scope, "ui") }
+    } finally {
+      this.repeated--
+    }
   },
 
   items: function(list, scope, mode) {
@@ -3626,8 +3701,15 @@ Compiler.prototype = {
       this.noProps(it.body, "for")
       var list = this.ex(it.list, scope)
       var inner = new Scope(scope, [it.name, it.index === null ? "\u0000index" : it.index])
+      this.repeated++
+      var forBody
+      try {
+        forBody = this.items(it.body.items, inner, mode)
+      } finally {
+        this.repeated--
+      }
       var key = it.key ? this.ex(it.key, inner) : null
-      return { t: "for", list: list, key: key, body: this.items(it.body.items, inner, mode), pos: it.pos }
+      return { t: "for", list: list, key: key, body: forBody, pos: it.pos }
     }
     if (it.kind === "call") {
       if (mode !== "draw") this.fail(it.call.name + "(...) draws, so it goes inside a Canvas", it.pos)
@@ -3746,6 +3828,19 @@ Compiler.prototype = {
       this.commands.push(!command ? "a terminal running the login shell"
         : command.k && typeof command.c === "string" ? command.c : "Terminal command built from widget values")
       this.guest = true
+    }
+    if (n.type === "Browser") {
+      this.browser = true
+      if (this.repeated > 0)
+        this.fail("a Browser can't go inside a for or a component: its page is the node's, so each copy would close the others'; write it out, two at most", n.pos)
+      // A home tile's or a face's only: elsewhere nothing gives its touches back to home or lets Back reach its history.
+      if (this.inScreen !== false)
+        this.fail("a Browser goes on a widget's tile or a face, not in a screen { }, an app, a panel or the key bar", n.pos)
+      if (++this.browsers > MAX_BROWSERS)
+        this.fail("a widget has room for " + MAX_BROWSERS + " Browsers, each a web view of its own: show another page by setting a Browser's url instead", n.pos)
+      var url = body.props.filter(function(p) { return p.name === "url" })[0]
+      if (!url) this.fail("a Browser needs a url: \"https://host/page\"", n.pos)
+      this.browserUrl(url.value, this.ex(url.value, scope), scope)
     }
     if (n.type === "Image") {
       var src = body.props.filter(function(p) { return p.name === "src" })[0]
@@ -3977,6 +4072,19 @@ Compiler.prototype = {
       if (TRIGGERS.indexOf(this.handlerName) >= 0 && first !== null && !anywhere)
         this.fail("speech(\"" + first + "\") works in onTap, not in a trigger; stop and cancel work anywhere", c.pos)
     }
+    if (c.name === "web" && this.webAt === null) this.webAt = c.pos
+    if (c.name === "airpods") this.commands.push(AIRPODS_COMMAND)
+    if (ASKS.indexOf(c.name) >= 0 && first === "request") {
+      var ask = c.name + "(\"request\")"
+      // Asking for what nothing reads: what it allows is only in the source.
+      if (!this.androidSources(c.name).length)
+        this.fail(ask + " asks for what source x = android." + c.name + " reads: declare it, then x.granted says whether it's allowed", c.pos)
+      // The permission dialog covers the widget before the finger lifts, and comes only for a touch.
+      if (this.handlerName === "onPress" || this.handlerName === "onRelease")
+        this.fail(ask + " opens Android's permission dialog over the widget before the finger lifts: put it in onTap", c.pos)
+      if (TRIGGERS.indexOf(this.handlerName) >= 0)
+        this.fail(ask + " works in onTap, not in a trigger: Android asks only when you tap", c.pos)
+    }
     if (c.name === "latch" && args.length > 1 && args[1].k && typeof args[1].c === "string" && LATCH_HOWS.indexOf(args[1].c) < 0)
       this.fail("latch's second value is " + LATCH_HOWS.join(", "), c.args[1].pos)
     if ((c.name === "screen" || c.name === "close") && this.screenAction === null) this.screenAction = c.pos
@@ -4057,12 +4165,15 @@ Compiler.prototype = {
 
   // The names of the sources that read android.speech: speech(...) needs one, and `on said.final` may type.
   speechSources: function() {
-    if (!this.speechNames) {
-      this.speechNames = this.ast.body.decls.filter(function(d) {
-        return d.kind === "source" && d.expr.k === "member" && d.expr.name === "speech" && d.expr.e.k === "name" && d.expr.e.name === "android"
-      }).map(function(d) { return d.name })
-    }
+    if (!this.speechNames) this.speechNames = this.androidSources("speech")
     return this.speechNames
+  },
+
+  // The names of the sources that read android.<name>.
+  androidSources: function(name) {
+    return this.ast.body.decls.filter(function(d) {
+      return d.kind === "source" && d.expr.k === "member" && d.expr.name === name && d.expr.e.k === "name" && d.expr.e.name === "android"
+    }).map(function(d) { return d.name })
   },
 
   // Fails on a named argument of call other than allowed.
@@ -4103,6 +4214,140 @@ Compiler.prototype = {
     if (start.indexOf("https://") !== 0) return
     if (what === "image") this.since(WEB_IMAGE, e.pos)
     this.commands.push(what + " GET " + (whole !== null ? whole : start + "…"))
+  },
+
+  // A Browser's url: a page from the web, at a host written out in the file, so the review can list it as
+  // "browser GET <url>" the way it lists http(...). https only: file:, content:, javascript: and data: say where a
+  // file is or run code, and http sends the page in the clear. Its values go through enc(), none of them the host.
+  browserUrl: function(e, ev, s) {
+    // Each way it can turn out: url: ready ? "https://a.test/" : "https://a.test/start".
+    if (e.k === "cond") {
+      this.browserUrl(e.a, this.ex(e.a, s), s)
+      this.browserUrl(e.b, this.ex(e.b, s), s)
+      return
+    }
+    var whole = this.constText(e, s)
+    var start = whole !== null ? whole : this.constantStart(e, s)
+    if (start.indexOf("http://") === 0) this.fail("a Browser loads over https only", e.pos)
+    if (start !== "" && start.indexOf("https://") !== 0)
+      this.fail("a Browser loads pages from the web, so https:// only: not file:, content:, javascript: or data:", e.pos)
+    // A page that's null loads nothing: nothing to check, and nothing to list.
+    if (ev.k && ev.c === null) return
+    var listed = whole !== null ? [whole] : this.shapes(e, s, "enc")
+    if (listed !== null && !(listed.length && listed.every(function(t) { return FIXED_HOST.test(t) }))) listed = null
+    if (listed === null) {
+      var w = this.urlWarning(e, s) || ["a Browser's url is https:// at a host written in the file, with its values put through enc()", e.pos]
+      this.fail(w[0], w[1])
+    }
+    var self = this
+    listed.forEach(function(t) { self.commands.push("browser GET " + t) })
+  },
+
+  // What e can turn out as, one string per way, with each value(...) call as SHAPE_VALUE and each number as
+  // SHAPE_NUMBER. Null when a value goes in any other way, or there are more than MAX_SHAPES.
+  shapes: function(e, s, value) {
+    var self = this
+    var ev = this.ex(e, s)
+    if (ev.k) {
+      // A URL that's null pauses its source: no shape.
+      if (typeof ev.c === "string" || typeof ev.c === "number") return [show(ev.c)]
+      return ev.c === null && value === "enc" ? [] : null
+    }
+    // Capped at each step: "${a ? "x" : "y"}" twenty times over would otherwise be millions of strings.
+    function capped(l) {
+      if (l === null) return null
+      var d = l.filter(function(x, i) { return l.indexOf(x) === i })
+      return d.length <= MAX_SHAPES ? d : null
+    }
+    function join(a, b) {
+      if (a === null || b === null) return null
+      var out = []
+      a.forEach(function(x) { b.forEach(function(y) { out.push(x + y) }) })
+      return capped(out)
+    }
+    var out = null
+    if (e.k === "interp") {
+      out = [""]
+      for (var i = 0; i < e.parts.length && out !== null; i++) out = join(out, this.shapes(e.parts[i], s, value))
+    } else if (e.k === "bin") {
+      out = e.op === "+" ? join(this.shapes(e.a, s, value), this.shapes(e.b, s, value)) : null
+    } else if (e.k === "cond") {
+      var a = this.shapes(e.a, s, value), b = a === null ? null : this.shapes(e.b, s, value)
+      out = a === null || b === null ? null : capped(a.concat(b))
+    } else if (e.k === "call") {
+      out = e.name === value ? [SHAPE_VALUE] : NUMBERS.indexOf(e.name) >= 0 ? [SHAPE_NUMBER] : null
+    } else if (e.k === "name") {
+      // A top-level let that is fixed text: `let api = "https://..."` and then "${api}/x".
+      var t = this.constText(e, s)
+      out = t === null ? null : [t]
+    }
+    return capped(out)
+  },
+
+  // Why e, a URL, can't be listed for review, and where, as [message, pos]: the first value that isn't put through
+  // enc() or a number, with the fix, or a server that comes from a value.
+  urlWarning: function(e, s) {
+    var self = this
+    // A value is the whole URL when it's reached through ternaries alone, not inside the text of one.
+    var whole = false
+    function bad(p, top) {
+      if (self.constText(p, s) !== null) return null
+      if (p.k === "interp") {
+        for (var i = 0; i < p.parts.length; i++) { var r = bad(p.parts[i], false); if (r) return r }
+        return null
+      }
+      if (p.k === "bin" && p.op === "+") return bad(p.a, false) || bad(p.b, false)
+      if (p.k === "cond") return bad(p.a, top) || bad(p.b, top)
+      if (p.k === "call" && (p.name === "enc" || NUMBERS.indexOf(p.name) >= 0)) return null
+      var ev = self.ex(p, s)
+      if (ev.k && ev.c === null) return null
+      whole = top
+      return p
+    }
+    var value = bad(e, true)
+    if (value) {
+      var code = this.snippet(value.pos)
+      if (whole)
+        return ["this URL is all a value (" + code + "), so the store's review can't show where it goes: write it out here, " +
+          "\"https://host/path?q=${enc(v)}\", with only its values from state or a source", value.pos]
+      var inText = e.k === "interp" && e.parts.indexOf(value) >= 0 || e.k === "cond"
+      var fix = value.k === "call" && value.name === "sh" ? "enc(...) instead of sh(...): sh() is for commands"
+        // Escaped by hand: enc() would escape the % again.
+        : value.k === "call" && value.name === "replace" && code.indexOf("%") >= 0 ? "enc(...) around the value itself and drop the replace(...): enc() does the escaping"
+        : inText ? "${enc(" + code + ")}"
+        : "enc(" + code + ")"
+      return ["a value in this URL isn't put through enc(), so the store's review can't show where it goes: write " + fix +
+        " (a number can go through int(n) or fixed(n, 4) instead; a path with / in it can't, so write its fixed parts out and enc() only the values between them)", value.pos]
+    }
+    // Every value is encoded: so either the server comes from one, or the URL has too many ways to turn out to list.
+    function fixed(p) {
+      if (p.k === "cond") return fixed(p.a) && fixed(p.b)
+      var ev = self.ex(p, s)
+      return ev.k && ev.c === null || self.server(p, s) !== null
+    }
+    if (fixed(e))
+      return ["this URL can turn out more than " + MAX_SHAPES + " ways, more than the store's review lists: write fewer ternaries into it, " +
+        "or pass the parts that vary through enc() as one value", e.pos]
+    return ["the server in this URL comes from a value: keep \"https://host/\" fixed text and put values after it", e.pos]
+  },
+
+  // The code of the expression at pos, as written: up to where it ends at its own depth.
+  snippet: function(pos) {
+    var src = this.src || ""
+    var depth = 0
+    var i = pos
+    while (i < src.length) {
+      var c = src.charAt(i)
+      if (c === "(" || c === "[" || c === "{") depth++
+      if (c === ")" || c === "]" || c === "}") {
+        if (depth === 0) break
+        depth--
+      }
+      if (depth === 0 && (c === "," || c === ";" || c === "\"" || c === "\n" || c === " " || c === "?" || c === ":")) break
+      i++
+    }
+    var out = src.substring(pos, i)
+    return (out === "" ? "value" : out).substring(0, 60)
   },
 
   // The text e starts with whatever its values turn out to be: "https://x.test/" for "https://x.test/${id}.svg".
@@ -4373,7 +4618,9 @@ Compiler.prototype = {
 
 // language is the one strings { } picks and lang() gives, like en or id; English unless the host says.
 function compile(src, language) {
-  return new Compiler(parse(src), language || "en").program()
+  var c = new Compiler(parse(src), language || "en")
+  c.src = src
+  return c.program()
 }
 
 // Line and column of a compile error, with the line and a caret, as the
