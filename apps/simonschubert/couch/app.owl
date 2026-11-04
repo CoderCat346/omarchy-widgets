@@ -1,5 +1,5 @@
 app "couch" {
-  meta { owl: 8; description: "A movie and TV tracker for Trakt: trending, popular and anticipated titles, cast, seasons and episodes, search; sign in for up next, a calendar, your watchlist, history and ratings"; version: "1.1"; license: "MIT"; category: "media" }
+  meta { owl: 8; description: "A movie and TV tracker for Trakt: trending, popular and anticipated titles, cast, seasons and episodes, search; sign in for up next, a calendar, your watchlist, history and ratings"; version: "1.2"; license: "MIT"; category: "media" }
   // A port of Couch for Trakt (github.com/SimonSchubert/omarchy-couch). Not affiliated with Trakt.
   // A title's page, search, history and settings are a level of their own; Back returns to the tab.
   title: open != null ? (open.m.title ?? "") : view == "search" ? "search" : view == "history" ? "history" : view == "settings" ? "settings" : tab == "upnext" ? "up next" : tab
@@ -36,15 +36,16 @@ app "couch" {
   asset eyeIcon = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iI2ZmZiIgZD0iTTEyLDQuNUM3LDQuNSAyLjczLDcuNjEgMSwxMmMxLjczLDQuMzkgNiw3LjUgMTEsNy41czkuMjcsLTMuMTEgMTEsLTcuNWMtMS43MywtNC4zOSAtNiwtNy41IC0xMSwtNy41ek0xMiwxN2MtMi43NiwwIC01LC0yLjI0IC01LC01czIuMjQsLTUgNSwtNSA1LDIuMjQgNSw1IC0yLjI0LDUgLTUsNXpNMTIsOWMtMS42NiwwIC0zLDEuMzQgLTMsM3MxLjM0LDMgMywzIDMsLTEuMzQgMywtMyAtMS4zNCwtMyAtMywtM3oiLz48L3N2Zz4="
   asset eyeOffIcon = base64"PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0iI2ZmZiIgZD0iTTEyLDdjMi43NiwwIDUsMi4yNCA1LDUgMCwwLjY1IC0wLjEzLDEuMjYgLTAuMzYsMS44M2wyLjkyLDIuOTJjMS41MSwtMS4yNiAyLjcsLTIuODkgMy40MywtNC43NSAtMS43MywtNC4zOSAtNiwtNy41IC0xMSwtNy41IC0xLjQsMCAtMi43NCwwLjI1IC0zLjk4LDAuN2wyLjE2LDIuMTZDMTAuNzQsNy4xMyAxMS4zNSw3IDEyLDd6TTIsNC4yN2wyLjI4LDIuMjggMC40NiwwLjQ2QzMuMDgsOC4zIDEuNzgsMTAuMDIgMSwxMmMxLjczLDQuMzkgNiw3LjUgMTEsNy41IDEuNTUsMCAzLjAzLC0wLjMgNC4zOCwtMC44NGwwLjQyLDAuNDJMMTkuNzMsMjIgMjEsMjAuNzMgMy4yNywzIDIsNC4yN3pNNy41Myw5LjhsMS41NSwxLjU1Yy0wLjA1LDAuMjEgLTAuMDgsMC40MyAtMC4wOCwwLjY1IDAsMS42NiAxLjM0LDMgMywzIDAuMjIsMCAwLjQ0LC0wLjAzIDAuNjUsLTAuMDhsMS41NSwxLjU1Yy0wLjY3LDAuMzMgLTEuNDEsMC41MyAtMi4yLDAuNTMgLTIuNzYsMCAtNSwtMi4yNCAtNSwtNSAwLC0wLjc5IDAuMiwtMS41MyAwLjUzLC0yLjJ6TTExLjg0LDkuMDJsMy4xNSwzLjE1IDAuMDIsLTAuMTZjMCwtMS42NiAtMS4zNCwtMyAtMywtM2wtMC4xNywwLjAxeiIvPjwvc3ZnPg=="
 
-  // The Trakt app Couch signs in as. Its source is public, so the secret identifies the app and
-  // protects nobody's account; signing in still needs the person's approval on trakt.tv.
-  // Settings can name another app instead.
+  // The Trakt app Couch reads Trakt's public lists as. A client ID is public by design (it goes out
+  // as trakt-api-key on every request); a client secret can't be kept in public source, so there is
+  // none built in, and signing in needs the person's own Trakt app, set under Settings, Trakt app.
   let builtinId = "FfaAy3QK7UmKwSgD3KP-Q4LbdHuki64OZBNNb44_ibc"
-  let builtinSecret = "Nezbd-pNTJDVPaoOG08jQG5LpJyrZ_YQzUjogOlplhY"
   state myId = "" persist
   state mySecret = "" persist
   let cid = myId != "" ? myId : builtinId
-  let csec = myId != "" ? mySecret : builtinSecret
+  let csec = myId != "" ? mySecret : ""
+  let canSignIn = csec != ""
+  let needApp = "Signing in needs your own Trakt app: create one at trakt.tv/oauth/applications and add its client ID and secret under Trakt app below."
 
   // {access, refresh, expires, life}: the person's tokens, times in Unix seconds.
   state auth = null persist
@@ -516,7 +517,7 @@ app "couch" {
       Text { text: text; bold: true; align: center }
       Text { text: "Sign in with your Trakt account to track episodes, keep a watchlist and see your calendar."; style: small; color: muted; align: center }
       Box {
-        onTap: { view = "settings"; stack = []; asking = true; authMsg = ""; codeRes = 0; codeRes = post("https://api.trakt.tv/oauth/device/code", {client_id: cid}, {"trakt-api-key": cid, "trakt-api-version": "2"}) }
+        onTap: { view = "settings"; stack = []; asking = canSignIn; authMsg = canSignIn ? "" : needApp; ownApp = ownApp || !canSignIn; codeRes = 0; codeRes = post(canSignIn ? "https://api.trakt.tv/oauth/device/code" : null, {client_id: cid}, {"trakt-api-key": cid, "trakt-api-version": "2"}) }
         Pill { text: "Sign in with Trakt"; pic: loginIcon; sel: true }
       }
     }
@@ -956,7 +957,7 @@ app "couch" {
                 Text { text: authMsg; style: small; color: red }
               }
               Box {
-                onTap: { authMsg = ""; codeRes = 0; codeRes = post(asking ? null : "https://api.trakt.tv/oauth/device/code", {client_id: cid}, {"trakt-api-key": cid, "trakt-api-version": "2"}); asking = true }
+                onTap: { authMsg = canSignIn ? "" : needApp; ownApp = ownApp || !canSignIn; codeRes = 0; codeRes = post(asking || !canSignIn ? null : "https://api.trakt.tv/oauth/device/code", {client_id: cid}, {"trakt-api-key": cid, "trakt-api-version": "2"}); asking = canSignIn }
                 Pill { text: asking ? "Getting a code…" : authMsg != "" ? "Try again" : "Sign in"; pic: loginIcon; sel: true }
               }
             } else {
@@ -996,7 +997,7 @@ app "couch" {
           }
 
           Head { text: "Trakt app" }
-          Text { text: "Optional. Couch signs in as its own Trakt app. To use one of yours, create it at trakt.tv/oauth/applications with the redirect URI urn:ietf:wg:oauth:2.0:oob and paste its client ID and secret here. Changing this signs you out."; style: small; color: muted }
+          Text { text: "Needed to sign in. The built-in app can only read Trakt's public lists, since a client secret can't be kept in public source. Create your own app at trakt.tv/oauth/applications with the redirect URI urn:ietf:wg:oauth:2.0:oob and paste its client ID and secret here. Changing this signs you out."; style: small; color: muted }
           if !ownApp {
             Box {
               onTap: ownApp = true
@@ -1196,7 +1197,7 @@ app "couch" {
               radius: 10 * corners
               Text { text: "Sign in to see when the shows you watch air next."; style: small; weight: 1 }
               Box {
-                onTap: { view = "settings"; asking = true; authMsg = ""; codeRes = 0; codeRes = post("https://api.trakt.tv/oauth/device/code", {client_id: cid}, {"trakt-api-key": cid, "trakt-api-version": "2"}) }
+                onTap: { view = "settings"; asking = canSignIn; authMsg = canSignIn ? "" : needApp; ownApp = ownApp || !canSignIn; codeRes = 0; codeRes = post(canSignIn ? "https://api.trakt.tv/oauth/device/code" : null, {client_id: cid}, {"trakt-api-key": cid, "trakt-api-version": "2"}) }
                 Pill { text: "Sign in"; pic: loginIcon; sel: true }
               }
             }
