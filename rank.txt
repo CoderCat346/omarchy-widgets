@@ -205,7 +205,6 @@ rcrohmana/stackfall
 derekross/nostr-inbox
 tusshar2000/widget-maker
 iosue-iulianus/baccarat
-cytrium/locket
 travonted/vcard
 breadleaves/verse
 madmasx/duolingo

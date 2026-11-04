@@ -1440,14 +1440,6 @@
 {"a": "tarikyolak/currencies", "b": "simonschubert/exchange-rates", "ab": {"looks": "tie", "useful": "B"}, "ba": {"looks": "tie", "useful": "A"}, "round": 12, "looks": 0.5, "useful": 0.0}
 {"a": "tarikyolak/currencies", "b": "derekross/bitcoin", "ab": {"looks": "B", "useful": "A"}, "ba": {"looks": "A", "useful": "B"}, "round": 12, "looks": 0.0, "useful": 1.0}
 {"a": "tarikyolak/currencies", "b": "rabfulton/ethereum", "ab": {"looks": "B", "useful": "A"}, "ba": {"looks": "A", "useful": "B"}, "round": 12, "looks": 0.0, "useful": 1.0}
-{"a": "cytrium/locket", "b": "abinanthankv/lastfm", "ab": {"looks": "A", "useful": "B"}, "ba": {"looks": "B", "useful": "A"}, "round": 12, "looks": 1.0, "useful": 0.0}
-{"a": "cytrium/locket", "b": "bryanperdana/retro-amp", "ab": {"looks": "A", "useful": "B"}, "ba": {"looks": "B", "useful": "A"}, "round": 12, "looks": 1.0, "useful": 0.0}
-{"a": "cytrium/locket", "b": "superjey/programme-tv", "ab": {"looks": "A", "useful": "B"}, "ba": {"looks": "B", "useful": "A"}, "round": 12, "looks": 1.0, "useful": 0.0}
-{"a": "cytrium/locket", "b": "hoangitk/vlc-player", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 12, "looks": 0.0, "useful": 0.0}
-{"a": "cytrium/locket", "b": "simonschubert/now-playing", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 12, "looks": 0.0, "useful": 0.0}
-{"a": "cytrium/locket", "b": "daileng/omarcharium", "ab": {"looks": "A", "useful": "B"}, "ba": {"looks": "B", "useful": "A"}, "round": 12, "looks": 1.0, "useful": 0.0}
-{"a": "cytrium/locket", "b": "vitalii-khomenko/chess", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 12, "looks": 0.0, "useful": 0.0}
-{"a": "cytrium/locket", "b": "simonschubert/today", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 12, "looks": 0.0, "useful": 0.0}
 {"a": "bloknayrb/claude-input", "b": "br1bit/tarjeta", "ab": {"looks": "B", "useful": "A"}, "ba": {"looks": "A", "useful": "B"}, "round": 12, "looks": 0.0, "useful": 1.0}
 {"a": "bloknayrb/claude-input", "b": "cbarland/spreedy", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 12, "looks": 0.0, "useful": 0.0}
 {"a": "bloknayrb/claude-input", "b": "simonschubert/todo", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 12, "looks": 0.0, "useful": 0.0}
@@ -1524,8 +1516,6 @@
 {"a": "gregoftheweb/koma-colors", "b": "igoruuu/visualizer", "ab": {"looks": "A", "useful": "tie"}, "ba": {"looks": "B", "useful": "tie"}, "round": 12, "looks": 1.0, "useful": 0.5}
 {"a": "gregoftheweb/koma-colors", "b": "simonschubert/ifsc", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 12, "looks": 0.0, "useful": 0.0}
 {"a": "gregoftheweb/koma-colors", "b": "simonschubert/today", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 12, "looks": 0.0, "useful": 0.0}
-{"a": "cytrium/locket", "b": "igoruuu/visualizer", "ab": {"looks": "A", "useful": "A"}, "ba": {"looks": "B", "useful": "B"}, "round": 12, "looks": 1.0, "useful": 1.0}
-{"a": "cytrium/locket", "b": "rithikrathan/vinyl-vis", "ab": {"looks": "A", "useful": "B"}, "ba": {"looks": "B", "useful": "A"}, "round": 12, "looks": 1.0, "useful": 0.0}
 {"a": "bloknayrb/claude-input", "b": "nicomaure/share-bridge", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 12, "looks": 0.0, "useful": 0.0}
 {"a": "bloknayrb/claude-input", "b": "nyaadesu/agenda", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 12, "looks": 0.0, "useful": 0.0}
 {"a": "bloknayrb/claude-input", "b": "cipriandrei10/google-calendar", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 12, "looks": 0.0, "useful": 0.0}
@@ -1552,7 +1542,6 @@
 {"a": "zachatrocity/obsidian", "b": "igoruuu/visualizer", "ab": {"looks": "A", "useful": "A"}, "ba": {"looks": "B", "useful": "B"}, "round": 12, "looks": 1.0, "useful": 1.0}
 {"a": "bastpt/omatvremote", "b": "igoruuu/visualizer", "ab": {"looks": "A", "useful": "A"}, "ba": {"looks": "B", "useful": "B"}, "round": 13, "looks": 1.0, "useful": 1.0}
 {"a": "bastpt/omatvremote", "b": "nicomaure/neon-ytdlp", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 13, "looks": 0.0, "useful": 0.0}
-{"a": "bastpt/omatvremote", "b": "cytrium/locket", "ab": {"looks": "B", "useful": "A"}, "ba": {"looks": "A", "useful": "B"}, "round": 13, "looks": 0.0, "useful": 1.0}
 {"a": "bastpt/omatvremote", "b": "superjey/programme-tv", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "B"}, "round": 13, "looks": 0.0, "useful": 0.5}
 {"a": "bastpt/omatvremote", "b": "jrpixel666/radio", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 13, "looks": 0.0, "useful": 0.0}
 {"a": "bastpt/omatvremote", "b": "hoangitk/vlc-player", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 13, "looks": 0.0, "useful": 0.0}
@@ -1582,7 +1571,6 @@
 {"a": "madmasx/dino", "b": "simonschubert/today", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 13, "looks": 0.0, "useful": 0.0}
 {"a": "nicomaure/sintonizador", "b": "igoruuu/visualizer", "ab": {"looks": "A", "useful": "A"}, "ba": {"looks": "B", "useful": "B"}, "round": 13, "looks": 1.0, "useful": 1.0}
 {"a": "nicomaure/sintonizador", "b": "nicomaure/neon-ytdlp", "ab": {"looks": "A", "useful": "A"}, "ba": {"looks": "B", "useful": "B"}, "round": 13, "looks": 1.0, "useful": 1.0}
-{"a": "nicomaure/sintonizador", "b": "cytrium/locket", "ab": {"looks": "A", "useful": "A"}, "ba": {"looks": "B", "useful": "B"}, "round": 13, "looks": 1.0, "useful": 1.0}
 {"a": "nicomaure/sintonizador", "b": "superjey/programme-tv", "ab": {"looks": "A", "useful": "A"}, "ba": {"looks": "B", "useful": "B"}, "round": 13, "looks": 1.0, "useful": 1.0}
 {"a": "nicomaure/sintonizador", "b": "jrpixel666/radio", "ab": {"looks": "B", "useful": "A"}, "ba": {"looks": "B", "useful": "B"}, "round": 13, "looks": 0.5, "useful": 1.0}
 {"a": "nicomaure/sintonizador", "b": "hoangitk/vlc-player", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "B", "useful": "A"}, "round": 13, "looks": 0.5, "useful": 0.0}
