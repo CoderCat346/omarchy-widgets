@@ -1,0 +1,219 @@
+widget "cacademo" {
+  size: 6x4
+  minSize: 4x3
+  padding: 0
+
+  meta {
+    description: "libcaca demos in a tile. Starts paused, so it stays quiet until you press play."
+    version: "1.0"
+    license: "MIT"
+    category: "fun"
+    owl: 10
+  }
+  requires { pacman: ["libcaca", "python"] }
+
+  // Chips write one word to a fifo. The helper draws one frame, then exits
+  // cacademo until play so a paused tile does not keep redrawing. The writes
+  // give up after a second, as with no helper reading the fifo they would wait
+  // for one forever.
+  state paused = true
+
+  Column {
+    fill: true
+    gap: 0
+    Row {
+      padding: [8, 6]
+      gap: 12
+      align: center
+      background: surface
+      Text {
+        text: "next"
+        padding: [14, 6]
+        align: center
+        style: label
+        color: foreground
+        background: alpha(background, 0.85)
+        radius: 8
+        onTap: {
+          run("timeout 1 sh -c 'echo cycle >> /tmp/omal-caca.cmd'")
+          paused = false
+          haptic()
+        }
+      }
+      Box { weight: 1 }
+      Text {
+        text: paused ? "play" : "pause"
+        padding: [14, 6]
+        align: center
+        style: label
+        color: foreground
+        background: alpha(background, 0.85)
+        radius: 8
+        onTap: {
+          run("timeout 1 sh -c 'echo pause >> /tmp/omal-caca.cmd'")
+          paused = !paused
+          haptic()
+        }
+      }
+    }
+    Terminal {
+      command: """cat > /tmp/omal-caca-drive.py << 'PY'
+import os, select, signal, struct, fcntl, termios, tty, time
+
+ctl = "/tmp/omal-caca.cmd"
+try:
+    os.remove(ctl)
+except OSError:
+    pass
+os.mkfifo(ctl, 0o600)
+os.chmod(ctl, 0o600)
+# A blocking open of this fifo never returns in proot.
+cmd = os.open(ctl, os.O_RDWR | os.O_NONBLOCK)
+
+pid = pty = None
+buf = b""
+
+def fit(signum=None, frame=None):
+    # In the child, before it becomes cacademo, pid is 0 and pty -1.
+    if pty is None or pid == 0:
+        return
+    try:
+        size = fcntl.ioctl(1, termios.TIOCGWINSZ, struct.pack("HHHH", 0, 0, 0, 0))
+        fcntl.ioctl(pty, termios.TIOCSWINSZ, size)
+        os.kill(pid, signal.SIGWINCH)
+    except OSError:
+        pass
+
+def start():
+    global pid, pty
+    if pid is not None:
+        return
+    pid, pty = os.forkpty()
+    if pid == 0:
+        os.execvp("cacademo", ["cacademo"])
+    fit()
+
+def stop():
+    # SIGSTOP does not stick here, and cacademo's own pause key still redraws.
+    global pid, pty
+    if pid is None:
+        return
+    child, master = pid, pty
+    pid = pty = None
+    try:
+        os.kill(child, signal.SIGKILL)
+    except OSError:
+        pass
+    try:
+        os.waitpid(child, 0)
+    except OSError:
+        pass
+    try:
+        os.close(master)
+    except OSError:
+        pass
+
+def copy_out():
+    # -1 means the demo has exited.
+    try:
+        data = os.read(pty, 65536)
+        if not data:
+            return -1
+        os.write(1, data)
+    except OSError:
+        return -1
+    return len(data)
+
+def toggle():
+    if pid is None:
+        start()
+    else:
+        stop()
+
+def send(keys):
+    if pid is None:
+        start()
+    try:
+        os.write(pty, keys)
+    except OSError:
+        stop()
+
+def read_cmds():
+    global buf
+    try:
+        chunk = os.read(cmd, 4096)
+    except OSError:
+        return
+    if not chunk:
+        return
+    buf += chunk
+    while b"\n" in buf:
+        line, buf = buf.split(b"\n", 1)
+        word = line.strip()
+        if word == b"pause":
+            toggle()
+        elif word == b"cycle":
+            send(b"\r")
+
+def show_frame():
+    # One still, then exit cacademo so the tile is idle until play.
+    start()
+    deadline = time.monotonic() + 1.0
+    shown = 0
+    first = None
+    while pid is not None and time.monotonic() < deadline:
+        if first and shown > 800 and time.monotonic() - first > 0.08:
+            break
+        try:
+            ready, _, _ = select.select([pty], [], [], 0.05)
+        except InterruptedError:
+            continue
+        if pty not in ready:
+            continue
+        n = copy_out()
+        if n < 0:
+            stop()
+            break
+        if n and first is None:
+            first = time.monotonic()
+        shown += n
+    stop()
+    read_cmds()
+
+signal.signal(signal.SIGCHLD, lambda *_: None)
+signal.signal(signal.SIGWINCH, fit)
+try:
+    tty.setraw(0)
+except tty.error:
+    pass
+
+try:
+    show_frame()
+    while True:
+        watch = [cmd, 0] if pid is None else [pty, cmd, 0]
+        try:
+            ready, _, _ = select.select(watch, [], [])
+        except InterruptedError:
+            continue
+        if pid is not None and pty in ready and copy_out() < 0:
+            stop()
+        if 0 in ready:
+            try:
+                keys = os.read(0, 65536)
+            except OSError:
+                break
+            if not keys:
+                break
+            send(keys)
+        if cmd in ready:
+            read_cmds()
+finally:
+    stop()
+PY
+exec python3 /tmp/omal-caca-drive.py"""
+      fontSize: 6
+      weight: 1
+      fill: width
+    }
+  }
+}
