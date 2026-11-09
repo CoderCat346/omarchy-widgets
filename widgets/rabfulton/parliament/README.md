@@ -32,7 +32,7 @@ Cache files, playback metadata, process identity, progress and a diagnostic log
 are kept only under `~/.cache/owl-parliament/`. Stop targets only the process
 group recorded by this widget, after checking its Linux process start time.
 Playback is started only by a tap and continues while the widget screen is
-closed. Listings refresh every five minutes and status every five seconds
+closed. Listings refresh every five minutes and status every five seconds while audio plays
 while the launcher keeps the widget's sources active.
 
 ## Limitations and validation

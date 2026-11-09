@@ -1,7 +1,7 @@
 widget "parliament" {
   size: 6x1
   minSize: 3x1
-  meta { description: "Listen to Commons and Lords live audio and seek through replays"; version: "1.2"; license: "MIT"; category: "media"; owl: 16 }
+  meta { description: "Listen to Commons and Lords live audio and seek through replays"; version: "1.3"; license: "MIT"; category: "media"; owl: 16 }
   requires { pacman: ["python", "ffmpeg", "pulseaudio"] }
   // Materialize only this bundled source; never download executable code.
   let bootstrap = """import os, sys, tempfile
@@ -105,6 +105,7 @@ def stop():
     if running(info):
         os.killpg(info['pid'], signal.SIGTERM)
     save('process.json', {})
+    save('position.json', {})
     save('now.json', {'status': 'Stopped', 'playing': False})
 
 def position(info):
@@ -186,9 +187,9 @@ if __name__ == '__main__':
         info = read('now.json')
         if info.get('playing') and not running(read('process.json')):
             info.update(playing=False, status='Stopped')
+            save('now.json', info)
         if info.get('playing'):
-            info['position'] = position(info)
-        print(json.dumps(info))
+            save('position.json', {'position': position(info)})
     elif action == 'stop':
         with (CACHE / 'control.lock').open('w') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
@@ -254,7 +255,10 @@ if __name__ == '__main__':
   state selected = null persist
   source listing = cmd("python -c ${sh(bootstrap)} ${sh(backend)} refresh") every 5m timeout 90s
   source data = file("~/.cache/owl-parliament/events.json") json
-  source now = cmd("python -c ${sh(bootstrap)} ${sh(backend)} status") every 5s json
+  // The player writes these as it goes; Python only starts while audio plays, to tick the position.
+  source now = file("~/.cache/owl-parliament/now.json") json
+  source progress = file("~/.cache/owl-parliament/position.json") json
+  every 5s { if now.playing ?? false { run("python -c ${sh(bootstrap)} ${sh(backend)} status") } }
   source vol = android.volume
   let events = (data.events ?? []).filter(e => e.house == house)
   let live = events.find(e => e.status == "LIVE")
@@ -267,7 +271,8 @@ if __name__ == '__main__':
   let sittingLabels = {LIVE: str.live, Replay: str.replay, Scheduled: str.scheduled, Unavailable: str.unavailable}
   let active = now.house == house && playing
   let status = active ? nowLabel : live != null ? str.liveAvailable : str.noLive
-  let elapsed = fmtTime(now.position ?? 0, "H:mm:ss", "UTC")
+  let heard = progress.position ?? now.position ?? 0
+  let elapsed = fmtTime(heard, "H:mm:ss", "UTC")
   let total = fmtTime(now.duration ?? 0, "H:mm:ss", "UTC")
   onTap: screen()
   component TransportIcon(on) {
@@ -380,7 +385,7 @@ if __name__ == '__main__':
         Text { text: nowLabel ?? str.chooseSitting; style: small; color: muted }
         if playing && now.replay && now.duration > 0 {
           Text { text: "${elapsed} / ${total}"; style: label; color: accent }
-          Slider { value: now.position ?? 0; max: now.duration; step: 1; fill: width; height: 32; onChange: run("python -c ${sh(bootstrap)} ${sh(backend)} seek ${int(value)}") }
+          Slider { value: heard; max: now.duration; step: 1; fill: width; height: 32; onChange: run("python -c ${sh(bootstrap)} ${sh(backend)} seek ${int(value)}") }
           Row {
             Button { text: str.back30; onTap: run("python -c ${sh(bootstrap)} ${sh(backend)} seek -30") }
             Button { text: str.forward30; onTap: run("python -c ${sh(bootstrap)} ${sh(backend)} seek +30") }
