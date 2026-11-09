@@ -5,7 +5,7 @@ widget "widget drain" {
   meta {
     owl: 9
     description: "Estimated battery drain per widget via owl-usage: animation, commands, network, and terminals. Tap to inspect the model and benchmark commands"
-    version: "1.8"
+    version: "1.9"
     license: "MIT"
     category: "system"
   }
@@ -133,6 +133,33 @@ FOR_RE = re.compile(r"\bfor\b")
 # the animation variable `time` on its own: not `p.time`, not `fmtTime(`, not
 # `timeout`, and (after blank_strings) never inside a string or a command.
 ANIM_RE = re.compile(r"(?<![\w.])time(?![\w])")
+def blank_handlers(text):
+    '''Handlers (onTap: { ... }, or a bare `onTap: expr`) run only when they fire,
+    so a `time` read inside one says nothing about redraw rate: blank each out,
+    brace-balanced for blocks and to end of line for one-liners.'''
+    spans = []
+    for m in re.finditer(r"\bon[A-Z]\w*\s*:", text):
+        j = m.end()
+        while j < len(text) and text[j] in " \t":
+            j += 1
+        if j < len(text) and text[j] == "{":
+            depth, k = 0, j
+            while k < len(text):
+                if text[k] == "{":
+                    depth += 1
+                elif text[k] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        k += 1
+                        break
+                k += 1
+            spans.append((m.start(), k))
+        else:
+            e = text.find("\n", j)
+            spans.append((m.start(), len(text) if e < 0 else e))
+    for a, b in reversed(spans):
+        text = text[:a] + " " * (b - a) + text[b:]
+    return text
 SOURCE_RE = re.compile(r"source\s+(\w+)\s*=")
 EVERY_RE = re.compile(r"\bevery\s+(\d+)\s*(s|m|h)\b")
 FRAME_RE = re.compile(r"drawing takes ([\d]+[.,]?[\d*]) ms per frame")
@@ -542,7 +569,15 @@ def parse_widget(path):
     w["shaders"] = len(re.findall(r"\bShader\s*\{", masked))
     w["images"] = len(re.findall(r"\bImage\s*\{", masked))
     w["webImages"] = len(re.findall(r"Image\s*\{[^}]*https?://", text, re.S))
-    w["animates"] = bool(ANIM_RE.search(masked))
+    # a live `time` read is what makes a tile redraw at frame rate; the same read
+    # inside a handler or trigger body runs only when the handler fires, so blank
+    # those bodies out first (the tapGate/screenAnim models below gate the rest).
+    live = masked
+    for t in w["triggers"]:
+        if t["kind"] in ("on", "every", "at", "when"):
+            live = live.replace(blank_strings(t["body"]), "", 1)
+    live = blank_handlers(live)
+    w["animates"] = bool(ANIM_RE.search(live))
     w["tapGate"] = tap_gated(masked)
     w["screenAnim"] = screen_only(masked)
     w["errors"] = read_errors(path)
@@ -833,8 +868,11 @@ def build(widgets, timings):
                 break
         total = sum(parts.values())
         top_parts = sorted(parts.items(), key=lambda kv: -kv[1])
+        if w["kind"] == "app":
+            notes.append("runs only while open: a per-open-window cost, not idle drain")
         rows.append({
             "file": w["file"], "name": w["name"], "kind": w["kind"],
+            "openOnly": w["kind"] == "app",
             "page": w["page"], "size": w["size"], "mah": round(total, 2),
             "parts": {k: round(v, 2) for k, v in parts.items() if v > 0},
             "top": [{"part": k, "label": PART_LABELS[k], "mah": round(v, 1)}
@@ -852,10 +890,10 @@ def build(widgets, timings):
             "notes": notes,
         })
     rows.sort(key=lambda r: -r["mah"])
-    total = sum(r["mah"] for r in rows) or 1.0
+    total = sum(r["mah"] for r in rows if not r.get("openOnly")) or 1.0
     top = max([r["mah"] for r in rows] or [1.0]) or 1.0
     for r in rows:
-        r["share"] = round(r["mah"] / total * 100, 1)
+        r["share"] = 0 if r.get("openOnly") else round(r["mah"] / total * 100, 1)
         r["score"] = round(r["mah"] / top * 100)
         r["pct"] = round(r["mah"] / MODEL["phoneMah"] * 100, 2)
     return {
