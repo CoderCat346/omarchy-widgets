@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 20 }
+  source d = android.drawer
+  Column { for a in d.apps { Text { text: a.dot ? "• ${a.name}" : a.name } } }
+}

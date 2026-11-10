@@ -1,0 +1,6 @@
+widget "x" {
+  meta { owl: 21 }
+  state px = 0
+  every second { px = px + 1 }
+  Text { text: px }
+}

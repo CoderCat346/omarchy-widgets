@@ -1,0 +1,6 @@
+widget "x" {
+  meta { owl: 20 }
+  state px = 0
+  every frame { px = px + 10 * dt }
+  Text { text: px }
+}

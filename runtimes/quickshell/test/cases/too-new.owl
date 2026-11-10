@@ -1,4 +1,4 @@
 widget "x" {
-  meta { owl: 20 }
+  meta { owl: 22 }
   Text { text: "a" }
 }

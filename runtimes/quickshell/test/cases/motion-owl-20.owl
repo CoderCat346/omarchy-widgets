@@ -1,0 +1,5 @@
+widget "x" {
+  meta { owl: 20 }
+  source m = android.motion
+  Text { text: m.x }
+}

@@ -2635,7 +2635,7 @@ var OPERATORS = {
 
 // ---------------------------------------------------------------- compiler
 
-var LEVEL = 19
+var LEVEL = 21
 var MAX_NODES = 500
 var MAX_SCREEN_NODES = 1000
 var MAX_ASSET_BYTES = 2097152
@@ -2791,6 +2791,14 @@ var HOME_LOCK = "lock"
 var FRAME_RATE = "fps"
 var MAX_FPS = 60
 SINCE[FRAME_RATE] = 19
+// owl 20 added only dot on android.drawer's apps, which have none here.
+// owl 21: how the phone is tilted, for tilt games and spirit levels; statements each frame, for games that move
+// things by what they were a frame before.
+var EVERY_FRAME = "every frame"
+SINCE["android.motion"] = 21
+SINCE[EVERY_FRAME] = 21
+// What a frame's dt is at most, as on the launcher: after a pause nothing jumps.
+var MAX_FRAME_DT = 0.1
 // The name a widget reads its strings { } by: str.feels.
 var STRINGS = "str"
 
@@ -2820,7 +2828,7 @@ var HANDLER_KINDS = { onChange: ["Slider", "Input"], onSubmit: ["Input"], onDism
   onNavigate: ["Browser"], onTitle: ["Browser"], onProgress: ["Browser"] }
 var TRIGGER_PARAMS = { on: ["value", "old"] }
 var ANDROID = ["battery", "device", "media", "notifications", "volume", "system", "network", "power", "sim", "alarm", "modes",
-  "apps", "agents", "recent", "drawer", "modifiers", "speech", "location", "airpods", "calendar"]
+  "apps", "agents", "recent", "drawer", "modifiers", "speech", "location", "airpods", "calendar", "motion"]
 // The android sources a widget asks Android's permission for, each with x("request") from a tap: never a press,
 // before the finger lifts, or a trigger, so a widget can't ask on its own.
 var ASKS = ["location", "calendar", "airpods"]
@@ -3508,6 +3516,7 @@ Compiler.prototype = {
       if (e.name === "location") this.commands.push("read the phone's approximate location, once you allow it")
       if (e.name === "calendar") this.commands.push("read events in the phone's calendars, once you allow it")
       if (e.name === "airpods") this.commands.push(AIRPODS_COMMAND)
+      if (e.name === "motion") this.commands.push("read how the phone is tilted while it shows")
       src.kind = "android." + e.name
       src.every = Math.max(every === null ? 60 : every, 1)
       src.timeout = 0
@@ -3632,10 +3641,17 @@ Compiler.prototype = {
 
   trigger: function(d) {
     this.since(d.trigger, d.pos)
+    if (d.trigger === "every" && d.expr.k === "name" && d.expr.name === "frame") {
+      this.since(EVERY_FRAME, d.pos)
+      // Run by the frame clock, which only runs for an animated widget.
+      this.animated = true
+      return { kind: "frame", expr: evOf(null), action: this.handler({ name: d.trigger, stmts: d.stmts, pos: d.pos }, this.root, ["dt"]),
+        pos: d.pos, first: false, dictation: false, each: null }
+    }
     var expr
     if (d.trigger === "every") {
       var s = num(this.constant(d.expr, "every"))
-      if (s === null) this.fail("every takes an interval, like every 10s { ... }", d.expr.pos)
+      if (s === null) this.fail("every takes an interval, like every 10s { ... }, or frame: every frame { ... }", d.expr.pos)
       if (s < 1) this.fail("every runs at most once a second", d.expr.pos)
       expr = evOf(s)
     } else {
@@ -4721,7 +4737,7 @@ function Instance(program, host, persisted, secrets) {
   // takes it, by the first checkTriggers(): seen without firing, or fired with old null for `on x first`.
   this.triggerLast = program.triggers.map(function(t) {
     if (t.kind === "on") return undefined
-    return t.kind === "every" ? null : self.guard(t.kind, function() { return run(t.expr, self.env) }, null)
+    return t.kind === "every" || t.kind === "frame" ? null : self.guard(t.kind, function() { return run(t.expr, self.env) }, null)
   })
 }
 
@@ -5002,6 +5018,17 @@ Instance.prototype = {
       })
     })
     return out
+  },
+
+  // `every frame { }`: whether there is one, and running them for a frame `dt` seconds after the last.
+  hasFrame: function() {
+    return this.program.triggers.some(function(t) { return t.kind === "frame" })
+  },
+
+  stepFrame: function(dt) {
+    var self = this
+    var d = Math.max(0, Math.min(dt, MAX_FRAME_DT))
+    this.program.triggers.forEach(function(t) { if (t.kind === "frame") t.action.run(self.env, [d]) })
   },
 
   everyTriggers: function() {

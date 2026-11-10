@@ -1,0 +1,10 @@
+widget "x" {
+  meta { owl: 21 }
+  state px = 0
+  state vx = 40
+  every frame {
+    px = px + vx * dt
+    if px > 100 { vx = -abs(vx) } else if px < 0 { vx = abs(vx) }
+  }
+  Canvas { circle(px, 20, 6) }
+}

@@ -180,6 +180,8 @@ Item {
     root.instance = new Owl.Instance(program, root.bridge, root.persisted || {}, root.secrets || {})
     root.sourceSpecs = root.instance.sources()
     root.everySpecs = root.instance.everyTriggers()
+    root.hasFrame = root.instance.hasFrame()
+    root.lastFrame = 0
     root.render()
     // Takes in each `on` trigger's first value, and runs the ones that say `first`.
     root.instance.checkTriggers()
@@ -191,6 +193,7 @@ Item {
     root.instance = null
     root.sourceSpecs = []
     root.everySpecs = []
+    root.hasFrame = false
     root.tree = null
     root.screenTree = null
     writeErrors()
@@ -539,7 +542,10 @@ Item {
   // that is `animated`, so without this a hidden branch kept the clock running:
   // on a Pixel 3a, now-playing with nothing playing held 85% of a core, and
   // 0.1% with it.
-  readonly property bool needsFrames: (!!root.tree && root.tree.readsTime) || root.timeCanvases > 0
+  // `every frame { }` (owl 21) needs frames whatever reads `time`: it moves things itself, by dt.
+  property bool hasFrame: false
+  property real lastFrame: 0
+  readonly property bool needsFrames: (!!root.tree && root.tree.readsTime) || root.timeCanvases > 0 || root.hasFrame
 
   // A Timer at the host's frame rate, not a FrameAnimation: a running
   // FrameAnimation has the window drawn again every display frame whether or
@@ -549,8 +555,13 @@ Item {
     repeat: true
     running: root.active && !!root.program && root.program.animated && root.visible && root.needsFrames
     onTriggered: {
-      root.instance.frame((Date.now() - root.clockStart) / 1000)
+      var now = Date.now()
+      // dt is 0 on the first frame and at most 0.1 s after a pause (stepFrame caps it), so nothing jumps.
+      if (root.hasFrame) root.instance.stepFrame(root.lastFrame > 0 ? (now - root.lastFrame) / 1000 : 0)
+      root.lastFrame = now
+      root.instance.frame((now - root.clockStart) / 1000)
       root.frame++
+      // What every frame changed renders through changed(), as any state write does.
       if (root.tree && root.tree.readsTime) root.render()
     }
   }

@@ -269,6 +269,8 @@ Item {
   // its fallback, a typed city, no events, and AirPods a desktop can't link to.
   readonly property var noLocation: ({ granted: false, available: false, lat: null, lon: null, accuracy: null, time: null })
   readonly property var noCalendar: ({ granted: false, events: [] })
+  // A desktop has no gyroscope or accelerometer: what the launcher gives on a phone without either.
+  readonly property var noMotion: ({ available: false, x: 0, y: 0, z: 0, pitch: 0, roll: 0 })
   readonly property var noAirpods: ({ supported: false, granted: false, connected: false, name: null, model: null, modelNumber: null,
     left: null, right: null, "case": null, headset: null, mode: null, modes: [], adaptiveLevel: null, conversation: null, speaking: null,
     oneBud: null, earDetection: null })
@@ -290,6 +292,7 @@ Item {
     if (root.kind === "android.location") root.widget.sourceObject(root.spec.slot, root.noLocation)
     if (root.kind === "android.calendar") root.widget.sourceObject(root.spec.slot, root.noCalendar)
     if (root.kind === "android.airpods") root.widget.sourceObject(root.spec.slot, root.noAirpods)
+    if (root.kind === "android.motion") root.widget.sourceObject(root.spec.slot, root.noMotion)
     if (root.kind === "android.media") root.widget.sourceObject(root.spec.slot, root.media)
   }
   onActiveChanged: root.pushNow()

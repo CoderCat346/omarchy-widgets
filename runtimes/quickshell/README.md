@@ -126,6 +126,11 @@ Where it differs, because Android is not here:
   allowed, `granted` false (AirPods' `supported` false too), so a widget shows
   what it shows before you allow them; `location("request")`,
   `calendar(...)` and `airpods("request")` report that there's nothing to ask.
+- **android.motion** is a desktop's, without a gyroscope or accelerometer:
+  `available` false and the rest 0, as the launcher gives it on a phone without
+  them. **every frame** runs at the OwlHost's `frameRate` while the widget shows,
+  with `dt` at most 0.1 s, as on the launcher. `dot` on `android.drawer`'s apps
+  (owl 20) never shows, since the drawer here has no apps.
 - **Input**'s `lines` wraps and grows up to that many lines, then scrolls;
   Enter submits when it has `onSubmit`, Shift+Enter starts a new line.
 - `gapsIn`, `gapsOut` and `borderWidth` are the OwlHost's, Omarchy's Hyprland
