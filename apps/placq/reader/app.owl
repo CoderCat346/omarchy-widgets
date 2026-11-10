@@ -1,5 +1,5 @@
 app "Reader" {
-  meta { owl: 11; description: "A quiet EPUB, MOBI and TXT reader with quotes, offline dictionaries, reading stats, OPDS catalogs and backups"; version: "3.0"; license: "MIT AND GPL-3.0-only"; category: "productivity" }
+  meta { owl: 14; description: "A quiet EPUB, MOBI and TXT reader with quotes, offline dictionaries, reading stats, OPDS catalogs and backups"; version: "3.1"; license: "MIT AND GPL-3.0-only"; category: "productivity" }
   // Reader draws its own header, so the window has no title row, and the page runs to the screen's
   // edges: no status bar, and under the navigation bar, which screenInset measures.
   title: ""
@@ -128,8 +128,10 @@ app "Reader" {
   let tint = activeTheme == "night" ? #9bbdb4 : #45675d
   let card = activeTheme == "night" ? #22292e : activeTheme == "sepia" ? #e5d7bb : #eeece3
   // An app has no tile: screenWidth and screenHeight are its whole view, and the paginator leaves screenInset for the navigation bar.
-  let pageHeight = int(screenHeight ?? 800)
-  let geometry = "${int(screenWidth ?? 400)} ${int(pageHeight)} ${int(screenInset ?? 0)}"
+  // The view runs edge-to-edge with no status bar, so keep the top clear of the cutout and the rounded corners.
+  let topGap = max(screenTop ?? 0, 16)
+  // The paginator allows 44 dp for the header; it is 52 dp here, so subtract 8 more.
+  let pageHeight = int(screenHeight ?? 800) - topGap - 8
   // The header also loads the local font for Canvas's line renderer.
   let readingFont = data.typeface == "sans" ? "/usr/share/fonts/TTF/DejaVuSans.ttf" : "/usr/share/fonts/TTF/DejaVuSerif.ttf"
   // Reading area geometry, shared by drawing and word hit-testing.
@@ -141,11 +143,10 @@ app "Reader" {
   let goal = goalDraft ?? stats.goal ?? 20
   let paneTitles = {login: "Sign in", settings: "Settings", contents: "Contents", search: "Search book", progress: "Progress", "quote-note": "Quote note", dictionary: "Dictionary", stats: "Reading stats"}
 
-  let readyGeometry = installed ? geometry : null
-  on readyGeometry first {
-    if installed && (screenInset ?? 0) < 120 {
-      run("python ~/.local/share/owl-reader-store/df0ed84cd93f626345b1968cb78d9e76d720a96889f7eb88ef92c444ad1d7b00/reader.py layout ${int(screenWidth ?? 400)} ${int(pageHeight)} ${int(screenInset ?? 0)} ${int(currentPage)} ${sh(data.layoutKey ?? "")}")
-    }
+  // The install and the view's geometry are known at different moments, and `on … first` would
+  // consume the initial null: run the layout whenever both are ready, once.
+  when installed && (screenInset ?? 0) < 120 {
+    run("python ~/.local/share/owl-reader-store/df0ed84cd93f626345b1968cb78d9e76d720a96889f7eb88ef92c444ad1d7b00/reader.py layout ${int(screenWidth ?? 400)} ${int(pageHeight)} ${int(screenInset ?? 0)} ${int(currentPage)} ${sh(data.layoutKey ?? "")}")
   }
   on task first {
     busy = false
@@ -326,6 +327,9 @@ app "Reader" {
   Column {
     fill: true
     gap: 0
+    // The status bar is off, so the view runs under the camera cutout and the phone's rounded
+    // corners: topGap keeps the first row below them.
+    padding: [0, topGap, 0, 0]
     if uiError != "" || (data.error ?? "") != "" {
       Text { text: "${uiError != "" ? uiError : data.error}\nTap to dismiss"; font: sans; fontSize: 12; color: red; background: card; padding: [24, 12]; maxLines: 5; onTap: { uiError = ""; run("python ~/.local/share/owl-reader-store/df0ed84cd93f626345b1968cb78d9e76d720a96889f7eb88ef92c444ad1d7b00/reader.py dismiss") } }
     }
@@ -338,10 +342,10 @@ app "Reader" {
     }
     if pane == "read" {
       Row {
-        height: 44
-        padding: [12, 0]
+        height: 52
+        padding: [16, 6]
         align: center
-        gap: 4
+        gap: 8
         Column {
           weight: 1
           gap: 2
@@ -384,6 +388,9 @@ app "Reader" {
         Canvas {
           weight: 1
           fill: width
+          // A page turn is instant; the launcher's press ripple would flash a bright disc
+          // across the dark page on every tap.
+          ripple: false
           onLongPress: {
             let rowIndex = floor((y - 10) / lineHeight)
             let localX = x - textLeft
