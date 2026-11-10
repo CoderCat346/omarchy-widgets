@@ -1,7 +1,7 @@
 widget "parliament" {
   size: 6x1
   minSize: 3x1
-  meta { description: "Parliament audio: chambers, committees, live streams and recordings with buffered pause and replay seeking"; version: "1.9"; license: "MIT"; category: "media"; owl: 16 }
+  meta { description: "Parliament audio: chambers, committees, live streams and recordings with buffered pause and replay seeking"; version: "1.10"; license: "MIT"; category: "media"; owl: 16 }
   requires { pacman: ["python", "mpv", "pulseaudio"] }
   // Materialize only this bundled source; never download executable code.
   let bootstrap = """import os, sys, tempfile
@@ -359,6 +359,13 @@ def play(event, house, offset=0):
 if __name__ == '__main__':
     action = sys.argv[1]
     if action == 'refresh':
+        # A player killed with the Linux side (or by a reboot) never writes Stopped: catch it here.
+        with (CACHE / 'control.lock').open('w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            info = read('now.json')
+            if (info.get('playing') or info.get('status') == 'Connecting…') and not running(read('process.json')):
+                info.update(playing=False, status='Stopped')
+                save('now.json', info)
         refresh()
     elif action == 'archive':
         archive(max(1, int(sys.argv[2])))
@@ -378,6 +385,8 @@ if __name__ == '__main__':
             if info.get('playing'):
                 process = read('process.json')
                 if not running(process):
+                    info.update(playing=False, status='Stopped')
+                    save('now.json', info)
                     sys.exit(0)
                 if info.get('socket'):
                     ipc(info, ['set_property', 'pause', True])
