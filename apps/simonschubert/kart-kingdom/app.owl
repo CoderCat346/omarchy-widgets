@@ -1,0 +1,1029 @@
+app "kart kingdom" {
+  // A go-kart attraction on an isometric plot. Start on a small field with a little cash, lay a
+  // track cell by cell, with ramps, bridges over other tracks and over footpaths, and crossings, buy
+  // karts, and charge guests at the gate and per session. Karts wear out as they run: repair them,
+  // or hire mechanics from a workshop, before they break down. Buy more land to build more and
+  // bigger tracks, shops, grandstands and gardens.
+  //
+  // There's no game loop. The cash is `bank` plus what the attraction makes a second times the
+  // seconds since `since`, worked out from what's built. It's settled into `bank` every 20 seconds
+  // and on every purchase, and a closed app earns for an hour at most. The karts' wear is added up
+  // every 20 seconds from how busy each track was. Karts and guests are drawn from the clock.
+
+  meta { owl: 14; description: "A go-kart tycoon: build your own kart tracks cell by cell with ramps, bridges and crossings, buy karts, repair them, and grow your attraction"; version: "1.0"; license: "MIT"; category: "games" }
+
+  title: ""
+  statusBar: false
+  edge: true
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+    <clipPath id="t"><rect width="256" height="256" rx="56"/></clipPath>
+    <g clip-path="url(#t)">
+    <rect width="256" height="256" fill="#5fb048"/>
+    <path d="M-20 200 C60 200 70 120 130 120 C190 120 200 60 280 60" fill="none" stroke="#e8e4d8" stroke-width="66"/>
+    <path d="M-20 200 C60 200 70 120 130 120 C190 120 200 60 280 60" fill="none" stroke="#474c57" stroke-width="54"/>
+    <g transform="translate(118 128) rotate(-24)">
+      <rect x="-46" y="-8" width="20" height="30" rx="6" fill="#1d1d22"/>
+      <rect x="26" y="-8" width="20" height="30" rx="6" fill="#1d1d22"/>
+      <rect x="-40" y="-14" width="80" height="34" rx="12" fill="#e0533d"/>
+      <rect x="-12" y="-30" width="24" height="22" rx="6" fill="#f2b632"/>
+      <circle cx="0" cy="-36" r="15" fill="#3fb6a8"/>
+      <rect x="-4" y="-44" width="16" height="8" rx="3" fill="#14213a"/>
+    </g>
+    <path d="M196 196 V120" stroke="#f7edd3" stroke-width="7"/>
+    <rect x="199" y="120" width="44" height="30" fill="#f7edd3"/>
+    <path d="M199 120 h11 v10 h-11 Z M221 120 h11 v10 h-11 Z M210 130 h11 v10 h-11 Z M232 130 h11 v10 h-11 Z M199 140 h11 v10 h-11 Z M221 140 h11 v10 h-11 Z" fill="#14213a"/>
+    </g>
+  </svg>"""
+
+  source now = clock every 1s
+
+  state bank = 6000 persist
+  state since = 0 persist
+  state wsince = 0 persist
+  // the cells with path on them; the two at the gate are always there
+  state paths = [247, 231] persist
+  // shops, buildings and gardens: top left cell, kind, price, open, and the cash spent on it
+  state items = [] persist
+  // every track: its pieces as [cell, level] from the start line on, done when closed into a loop,
+  // ticket price, open, cash spent, name, karts and their class
+  state tracks = [] persist
+  // how worn each track's karts are, 0 to 100
+  state wear = [] persist
+  state fee = 5 persist
+  state staff = 0 persist
+  state mech = 0 persist
+  // how much of the plot is ours: 0 is 8 cells square, 4 the whole 16
+  state land = 0 persist
+  // -1 looks around, 0-11 places that kind, 12 lays path, 20 builds track
+  state tool = -1
+  state tab = 0
+  // the item picked, or 1000 + a track, or -1
+  state sel = -1
+  // the level the next track piece aims for
+  state bh = 0
+  state zoom = 1
+  state panX = 0
+  state panY = 0
+  state arm = false
+  state msg = ""
+  state msgT = -99
+
+  when now != null && since == 0 { since = now }
+  when now != null && wsince == 0 { wsince = now }
+  every 20s {
+    if now != null {
+      let c0 = coins
+      let dt = clamp(now - wsince, 0, 3600)
+      wear = range(len(tracks)).map(j => clamp((wear[j] ?? 0) + dwr[j] * dt, 0, 100))
+      wsince = now
+      bank = c0
+      since = now
+    }
+  }
+
+  // ---- what there is to build ---------------------------------------------------------------------
+  // t: 1 shop, 2 garden, 3 building; w: 1 or 2 cells square
+  let KD = [
+    {n: "Snack Bar", t: 1, w: 1, cost: 450, p: 3, fair: 3, s: 0, c: "#e0533d"},
+    {n: "Drinks", t: 1, w: 1, cost: 300, p: 2, fair: 2, s: 1, c: "#3fb6a8"},
+    {n: "Restrooms", t: 1, w: 1, cost: 400, p: 0, fair: 1, s: 2, c: "#4f8fd6"},
+    {n: "Helmet Shop", t: 1, w: 1, cost: 600, p: 5, fair: 4, s: 3, c: "#f2b632"},
+    {n: "Workshop", t: 3, w: 2, cost: 2000, c: "#8a94a6"},
+    {n: "Grandstand", t: 3, w: 2, cost: 2500, c: "#c94f4f"},
+    {n: "Tyre Wall", t: 2, w: 1, cost: 40, c: "#26262b"},
+    {n: "Tree", t: 2, w: 1, cost: 20, c: "#3d8b45"},
+    {n: "Flowers", t: 2, w: 1, cost: 15, c: "#e86fb0"},
+    {n: "Litter Bin", t: 2, w: 1, cost: 30, c: "#4c9b6a"},
+    {n: "Fountain", t: 2, w: 1, cost: 250, c: "#7fc6e8"},
+    {n: "Flags", t: 2, w: 1, cost: 60, c: "#f2b632"}
+  ]
+  let KC = [
+    {n: "Rookie", cost: 300, v: 1, fuel: 0.15},
+    {n: "Sport", cost: 800, v: 1.3, fuel: 0.25},
+    {n: "Pro", cost: 1800, v: 1.6, fuel: 0.2}
+  ]
+  let TABK = [[20, 4, 5, 6], [0, 1, 2, 3], [7, 8, 9, 10, 11], [12], []]
+  let TABN = ["Track", "Shops", "Garden", "Paths", "Park"]
+  let TN = ["Thunder Lane", "Apex Alley", "Rubber Ridge", "Hairpin Hollow", "Turbo Twist", "Pit Viper", "Grip Gully", "Skid Row"]
+  let KCOL = ["#e0533d", "#3fb6a8", "#f2b632", "#8c6bd6", "#4f8fd6", "#e86fb0", "#f7edd3", "#79d48f"]
+  let LANDC = [0, 4000, 10000, 25000, 50000]
+  let SPEED = 3
+  let HZ = 0.16
+  let LZ = 1.5
+  let HW = 0.3
+
+  // ---- the plot, 16 cells square, the gate on its front left edge ---------------------------------
+  let N = 16
+  let NN = 256
+  let GC = 247
+  let LX0 = [4, 3, 2, 1, 0][land]
+  let LX1 = N - LX0
+  let LY0 = [8, 6, 4, 2, 0][land]
+  let LS0 = N - LY0
+  let isO = range(NN).map(c => c % N >= LX0 && c % N < LX1 && floor(c / N) >= LY0)
+  let nbs = range(NN).map(c => [c >= N ? c - N : -1, c < NN - N ? c + N : -1, c % N > 0 ? c - 1 : -1, c % N < N - 1 ? c + 1 : -1].filter(n => n >= 0))
+  let isW = range(NN).map(c => [[c % N + 0.5, floor(c / N) + 0.5]].map(q => sqrt(pow(q[0] - 10, 2) + pow(q[1] - 9, 2)) < 1.1 + hash(c, 7) * 0.5 || sqrt(pow(q[0] - 12.5, 2) + pow(q[1] - 4, 2) * 1.3) < 1.9 + hash(c, 8) * 0.8)[0])
+  let foot = it => KD[it.k].w == 2 ? [it.c, it.c + 1, it.c + N, it.c + N + 1] : [it.c]
+  let own = reduce(range(len(items)), (A, i) => reduce([items[i]].map(foot)[0], (B, c) => set(B, c, i), A), range(NN).map(c => -1))
+  // the levels of track in each cell, and the track there
+  let lv = reduce(tracks, (A, tr) => reduce(tr.t, (B, t) => set(B, t[0], B[t[0]] + [t[1]]), A), range(NN).map(c => []))
+  let trk = reduce(range(len(tracks)), (A, j) => reduce(tracks[j].t, (B, t) => set(B, t[0], j), A), range(NN).map(c => -1))
+  let isP = reduce(paths, (A, c) => set(A, c, true), range(NN).map(c => false))
+  let free = range(NN).filter(c => isO[c] && own[c] < 0 && !isP[c] && !isW[c] && len(lv[c]) == 0)
+  // steps along the paths from the gate, -1 for none
+  let dist = reduce(range(NN), (A, s) => len(A.f) == 0 ? A : [unique(flatten(A.f.map(c => nbs[c]))).filter(n => isP[n] && A.d[n] < 0)].map(nf => {d: reduce(nf, (D, n) => set(D, n, s + 1), A.d), f: nf})[0], {d: set(range(NN).map(c => -1), GC, 0), f: [GC]}).d
+  let doorOf = cs => first(unique(flatten(cs.map(c => nbs[c]))).filter(n => dist[n] >= 0).sortBy(n => dist[n])) ?? -1
+  let itemDoor = items.map(it => KD[it.k].t != 1 ? -1 : [[it].map(foot)[0]].map(doorOf)[0])
+  let trDoor = tracks.map(tr => tr.d ? [tr.t.take(3).map(t => t[0])].map(doorOf)[0] : -1)
+
+  // ---- tracks: shape, the karts' run and the rating ------------------------------------------------
+  // Each piece is a curve from the edge it comes in by to the edge it leaves by, sampled 5 times,
+  // with the road's two edges either side. Karts speed up on straights and downhill, slow on climbs,
+  // and brake for corners: braking hard from speed makes a track difficult.
+  let pj = q => [(q[0] - q[1]) * 0.5, (q[0] + q[1]) * 0.25 - q[2] * HZ]
+  let boxF = b => [[[b[0], b[1]], [b[0] + b[2], b[1]], [b[0] + b[2], b[1] + b[3]], [b[0], b[1] + b[3]]].map(q => [(q[0] - q[1]) * 0.5, (q[0] + q[1]) * 0.25])].map(Cn => [
+    {p: [Cn[3], Cn[2]].map(v => [v[0], v[1] - (b[4] + b[5]) * HZ]) + [Cn[2], Cn[3]].map(v => [v[0], v[1] - b[4] * HZ]), f: mix(b[6], "#000000", 0.18)},
+    {p: [Cn[1], Cn[2]].map(v => [v[0], v[1] - (b[4] + b[5]) * HZ]) + [Cn[2], Cn[1]].map(v => [v[0], v[1] - b[4] * HZ]), f: mix(b[6], "#000000", 0.34)},
+    {p: Cn.map(v => [v[0], v[1] - (b[4] + b[5]) * HZ]), f: b[6]}
+  ])[0]
+  let ellF = e => range(14).map(i => [rad(i * 360 / 14)].map(a => [(e[0] + cos(a) * e[2] - e[1] - sin(a) * e[2]) * 0.5, (e[0] + cos(a) * e[2] + e[1] + sin(a) * e[2]) * 0.25 - e[3] * HZ])[0])
+  let tstat = tr => [tr.t.map(t => [t[0] % N + 0.5, floor(t[0] / N) + 0.5, t[1]])].map(nd => [len(nd)].map(n => [range(n).map(k => n > 2 && (tr.d || (k > 0 && k < n - 1)) && (nd[(k + 1) % n][0] - nd[k][0] != nd[k][0] - nd[(k + n - 1) % n][0] || nd[(k + 1) % n][1] - nd[k][1] != nd[k][1] - nd[(k + n - 1) % n][1]))].map(turn => [KC[tr.cl]].map(K => [[
+      reduce(range(n), (A, k) => [[k == 0 ? 0 : nd[k][2] - nd[k - 1][2], turn[k] ? 1.1 * K.v : 2.2 * K.v]].map(Q => [clamp(min(A.v + 0.45 * K.v + (Q[0] < 0 ? 0.35 : Q[0] > 0 ? -0.3 : 0), Q[1] + (Q[0] < 0 ? 0.3 : 0)), 0.6, 3 * K.v)].map(v => [A.t + 1.1 / (A.v + v)].map(t2 => {v: v, mx: max(A.mx, v), br: A.br + max(0, A.v - Q[1]), t: t2, cum: A.cum + [t2]})[0])[0])[0], {v: 1, mx: 1, br: 0, t: 0, cum: [0]}),
+      range(n).map(k => [[
+        k == 0 && !tr.d ? (n > 1 ? [2 * nd[0][0] - nd[1][0], 2 * nd[0][1] - nd[1][1], 0] : [nd[0][0] - 1, nd[0][1], 0]) : nd[(k + n - 1) % n],
+        nd[k],
+        k == n - 1 && !tr.d ? (n > 1 ? [2 * nd[k][0] - nd[k - 1][0], 2 * nd[k][1] - nd[k - 1][1], nd[k][2]] : [nd[0][0] + 1, nd[0][1], 0]) : nd[(k + 1) % n]
+      ]].map(Q => [[[(Q[0][0] + Q[1][0]) / 2, (Q[0][1] + Q[1][1]) / 2, (Q[0][2] + Q[1][2]) / 2], Q[1], [(Q[2][0] + Q[1][0]) / 2, (Q[2][1] + Q[1][1]) / 2, (Q[2][2] + Q[1][2]) / 2]]].map(M => range(5).map(i => [i / 4].map(t => [[
+        (1 - t) * (1 - t) * M[0][0] + 2 * (1 - t) * t * M[1][0] + t * t * M[2][0],
+        (1 - t) * (1 - t) * M[0][1] + 2 * (1 - t) * t * M[1][1] + t * t * M[2][1],
+        ((1 - t) * (1 - t) * M[0][2] + 2 * (1 - t) * t * M[1][2] + t * t * M[2][2]) * LZ,
+        (1 - t) * (M[1][0] - M[0][0]) + t * (M[2][0] - M[1][0]),
+        (1 - t) * (M[1][1] - M[0][1]) + t * (M[2][1] - M[1][1])
+      ]].map(S => [max(0.0001, sqrt(S[3] * S[3] + S[4] * S[4]))].map(L => [S[0], S[1], S[2], -S[4] / L * HW, S[3] / L * HW])[0])[0])[0]))[0])[0])
+    ]].map(Z => [{
+      T: count(turn, b => b),
+      ch: count(range(n), k => turn[k] && turn[(k + 1) % n]),
+      hl: count(range(n), k => nd[k][2] != nd[(k + n - 1) % n][2]),
+      cr: count(range(n), k => len(lv[tr.t[k][0]]) > 1),
+      el: count(nd, p => p[2] > 0),
+      top: max(0, last(sort(nd.map(p => p[2]))) ?? 0)
+    }].map(F => {
+      n: n, T: F.T, cr: F.cr, el: F.el, top: F.top,
+      exc: round(clamp(0.8 + F.T * 0.07 + F.ch * 0.12 + F.hl * 0.1 + F.cr * 0.45 + F.top * 0.25 + Z[0].mx * 0.6 + min(n, 70) * 0.025 + tr.cl * 0.8 - (F.T < 4 ? 1.5 : 0), 0.3, 9.9), 1),
+      diff: round(clamp(0.5 + Z[0].br * 0.3 + F.ch * 0.15 + F.hl * 0.05 + tr.cl * 1.1, 0.3, 9.9), 1),
+      mx: Z[0].mx, lap: Z[0].t,
+      // where a kart is, in pieces from the start line, at 64 even steps of the lap
+      sx: range(65).map(i => [i * Z[0].t / 64].map(u => [clamp(count(Z[0].cum, c => c <= u) - 1, 0, n - 1)].map(m => m + clamp((u - Z[0].cum[m]) / max(0.01, Z[0].cum[m + 1] - Z[0].cum[m]), 0, 1))[0])[0]),
+      pp: Z[1].map(P => P.map(s => [[[[s[0], s[1], s[2]]].map(pj)[0], [[s[0] + s[3], s[1] + s[4], s[2]]].map(pj)[0]]].map(V => [V[0][0], V[0][1], V[1][0] - V[0][0], V[1][1] - V[0][1]])[0])),
+      prims: range(n).map(k => [[Z[1][k].map(s => [[s[0] + s[3], s[1] + s[4], s[2]]].map(pj)[0]), Z[1][k].map(s => [[s[0] - s[3], s[1] - s[4], s[2]]].map(pj)[0]), Z[1][k]]].map(E => [[any(E[2], s => s[2] > 0.01), nd[k][2] > 0 && !isP[tr.t[k][0]] && all(lv[tr.t[k][0]], z => z >= nd[k][2])]].map(B =>
+        (B[1] ? [-1, 1].map(sd => {l: [[E[2][2][0] + E[2][2][3] * 0.75 * sd, E[2][2][1] + E[2][2][4] * 0.75 * sd, 0], [E[2][2][0] + E[2][2][3] * 0.75 * sd, E[2][2][1] + E[2][2][4] * 0.75 * sd, E[2][2][2] - 0.5]].map(pj), s: "#9aa3b5", w: 0.07}) : [])
+        + (B[0] ? [{p: (E[0] + reverse(E[1])).map(v => [v[0], v[1] + 0.55 * HZ]), f: "#6d7586"}] : [])
+        + [{p: E[0] + reverse(E[1]), f: "#474c57"}]
+        + (B[0] ? [{l: E[0].map(v => [v[0], v[1] - 0.45 * HZ]), s: "#d6dce6", w: 0.025}, {l: E[1].map(v => [v[0], v[1] - 0.45 * HZ]), s: "#d6dce6", w: 0.025}] : [])
+        + [{l: E[0], s: turn[k] ? "#e0533d" : "#e8e4d8", w: turn[k] ? 0.05 : 0.025}, {l: E[1], s: turn[k] ? "#e0533d" : "#e8e4d8", w: turn[k] ? 0.05 : 0.025}]
+        + (k == 1 ? [{l: [E[0][2], E[1][2]], s: "#f7f2e8", w: 0.09}]
+            + [-1, 1].map(sd => {l: [[E[2][2][0] + E[2][2][3] * 1.3 * sd, E[2][2][1] + E[2][2][4] * 1.3 * sd, E[2][2][2]], [E[2][2][0] + E[2][2][3] * 1.3 * sd, E[2][2][1] + E[2][2][4] * 1.3 * sd, E[2][2][2] + 4]].map(pj), s: "#c9d2e0", w: 0.04})
+            + [{p: [[1.3, 4], [-1.3, 4], [-1.3, 3.1], [1.3, 3.1]].map(o => [[E[2][2][0] + E[2][2][3] * o[0], E[2][2][1] + E[2][2][4] * o[0], E[2][2][2] + o[1]]].map(pj)[0]), f: "#f2b632"}] : [])
+      )[0])[0])
+    })[0])[0])[0])[0])[0])[0]
+  let ts = tracks.map(tr => [tr].map(tstat)[0])
+  let bi = indexOf(tracks.map(tr => tr.d), false)
+  let bt = bi >= 0 ? tracks[bi].t : []
+  let bn = len(bt)
+  let bl = bn > 0 ? bt[bn - 1] : [-1, 0]
+  let nextZ = bn < 3 ? 0 : clamp(bh, max(0, bl[1] - 1), min(4, bl[1] + 1))
+  let costAt = q => q[0] == 0 ? 700 : q[0] < 3 ? 100 : 40 + 35 * q[1]
+  let pieceCost = [[bn, nextZ]].map(costAt)[0]
+
+  // ---- the attraction's numbers ---------------------------------------------------------------------
+  let tset = tracks.map(tr => reduce(tr.t, (A, t) => set(A, t[0], true), range(NN).map(c => false)))
+  let tyres = range(len(tracks)).map(j => count(items, it => it.k == 6 && any(nbs[it.c], c => tset[j][c])))
+  let gsOn = min(4, count(items, it => it.k == 5 && any(flatten([it].map(foot)[0].map(c => nbs[c])), c => len(lv[c]) > 0)))
+  let nShop = count(items, it => it.k == 4)
+  let mechMax = nShop * 3
+  let kTot = sum(tracks.map(tr => tr.d ? tr.k : 0))
+  let cov = kTot > 0 ? min(1, min(mech, mechMax) * 4 / kTot) : 1
+  let kw = range(len(tracks)).map(j => tracks[j].k - round(tracks[j].k * clamp(((wear[j] ?? 0) - 40) / 60, 0, 1)))
+  let doneJ = range(len(tracks)).filter(j => tracks[j].d)
+  let R = doneJ.map(j => {j: j, n: TN[tracks[j].n % 8], exc: ts[j].exc, diff: ts[j].diff, p: tracks[j].p, kw: kw[j], cyc: ts[j].lap * 2 + 8,
+    on: tracks[j].o && trDoor[j] >= 0 && kw[j] > 0, pull: 20 + ts[j].exc * 8, val: ts[j].exc * 1.2 + 2 + tracks[j].cl * 1.5,
+    risk: max(0, ts[j].diff - 3) * (1 - 0.6 * min(1, tyres[j] / max(1, ts[j].T / 2))), bf: tracks[j].k > 0 ? 1 - kw[j] / tracks[j].k : 0, fuel: KC[tracks[j].cl].fuel * (1 + ts[j].n / 30)})
+  let trR = range(len(tracks)).map(j => indexOf(doneJ, j))
+  // the share of guests brave enough for a track, and whether its price seems fair to them
+  let frac = R.map(r => clamp((9.5 - r.diff) / 6, 0, 1))
+  let pok = R.map(r => r.p <= r.val * 1.6 + 0.5)
+  let appeal = range(len(R)).map(i => R[i].on ? (R[i].exc + 1) * frac[i] * (pok[i] ? 1 : 0.1) : 0)
+  let appealT = max(0.001, sum(appeal))
+  let hasS = range(4).map(s => count(range(len(items)), i => items[i].k == s && items[i].o && itemDoor[i] >= 0))
+  let nScen = count(items, it => it.k >= 7 && it.k != 9)
+  let nBins = count(items, it => it.k == 9)
+  let pullT = sum(R.map(r => r.on ? r.pull : 0)) + (len(R) > 0 ? gsOn * 20 : 0)
+  let nOn = count(R, r => r.on)
+  let over = count(range(len(R)), i => R[i].on && !pok[i])
+  let fairFee = 4 + pullT / 25
+  let feeF = fee <= fairFee ? 1 : max(0.15, 1 - (fee - fairFee) / fairFee)
+  let rating0 = clamp(300 + min(250, 50 * nOn) + min(150, 12 * sum(R.filter(r => r.on).map(r => r.exc))) + (hasS[0] > 0 ? 40 : -60) + (hasS[1] > 0 ? 40 : -60) + (hasS[2] > 0 ? 40 : -80) + (hasS[3] > 0 ? 20 : 0)
+    + min(100, nScen * 4) + gsOn * 25 - 60 * over - sum(R.map(r => r.bf * 120 + r.risk * 15)), 0, 999)
+  let G0 = pullT * (0.35 + rating0 / 1000)
+  let litter = clamp(floor((hasS[0] > 0 ? G0 / 16 : 0) + (hasS[1] > 0 ? G0 / 20 : 0) - nBins * 4 - staff * 15), 0, 60)
+  let rating = clamp(floor(rating0 - litter * 5), 0, 999)
+  let guests = floor(pullT * (0.35 + rating / 1000) * feeF)
+  // drivers a second, by demand and by how many karts run a session
+  let dem = range(len(R)).map(i => guests / 120 * appeal[i] / appealT)
+  let thr = R.map(r => r.kw / r.cyc)
+  let riders = range(len(R)).map(i => R[i].on ? min(dem[i], thr[i]) : 0)
+  let queue = range(len(R)).map(i => R[i].on ? round(min(99, max(0, dem[i] - thr[i]) * 90 + riders[i] * R[i].cyc * 0.5)) : 0)
+  // wear a second: busy, difficult tracks wear karts fastest; mechanics slow it down
+  let dwr = range(len(tracks)).map(j => trR[j] < 0 ? 0 : [trR[j]].map(i => (0.004 + 0.1 * (R[i].on ? riders[i] / max(0.0001, thr[i]) : 0) * (1 + R[i].risk * 0.3)) * (1 - 0.85 * cov))[0])
+  let SD = [300, 250, 400, 600]
+  let shopRate = range(len(items)).map(i => KD[items[i].k].t != 1 || !items[i].o || itemDoor[i] < 0 ? 0 : [KD[items[i].k]].map(d => guests / SD[d.s] / hasS[d.s] * (items[i].p <= d.fair * 2 + 0.5 ? 1 : 0.05))[0])
+  let rideInc = sum(range(len(R)).map(i => riders[i] * (R[i].p - R[i].fuel)))
+  let shopInc = sum(range(len(items)).map(i => shopRate[i] * items[i].p))
+  let upkeep = sum(items.map(it => KD[it.k].t == 1 ? 0.02 : it.k == 4 ? 0.05 : it.k == 5 ? 0.04 : 0)) + sum(ts.map(t => 0.03 + 0.003 * t.n)) + staff * 0.08 + mech * 0.12
+  let rate = SPEED * (rideInc + shopInc + guests / 360 * fee - upkeep)
+  let tnow = now ?? since
+  let coins = bank + rate * clamp(tnow - since, 0, 3600)
+  let ri = sel >= 1000 ? trR[sel - 1000] ?? -1 : -1
+
+  let pr = p => p == floor(p) ? "$${p}" : "$${fixed(p, 2)}"
+  let cash = n => (n < 0 ? "-$" : "$") + fmtNum(abs(floor(n)))
+  let excL = v => v < 2 ? "low" : v < 4 ? "medium" : v < 6 ? "good" : v < 8 ? "great" : "superb"
+  let difL = v => v < 2 ? "easy" : v < 4 ? "tricky" : v < 6 ? "hard" : v < 8 ? "wild" : "brutal"
+  let repairC = j => floor((wear[j] ?? 0) * tracks[j].k * KC[tracks[j].cl].cost * 0.006)
+  let hudCash = [coins].map(cash)[0]
+  let hudRate = "${rate >= 0 ? "+" : "-"}${[abs(rate * 60)].map(cash)[0]}/min"
+  let hudGuests = "${guests}"
+  let hudRating = "${rating}"
+
+  // what the guests are thinking, most common first
+  let topExc = last(sort(R.filter(r => r.on).map(r => r.exc))) ?? 0
+  let thoughts = ([
+    [hasS[0] == 0 ? floor(guests * 0.3) : 0, "I'm hungry"],
+    [hasS[1] == 0 ? floor(guests * 0.35) : 0, "I'm thirsty"],
+    [hasS[2] == 0 ? floor(guests * 0.25) : 0, "I need a restroom"],
+    [litter > 8 ? floor(guests * litter / 80) : 0, "These paths are covered in litter"],
+    [nOn > 0 && topExc < 3.5 ? floor(guests * 0.3) : 0, "I want a track with more twists and bridges"],
+    [feeF < 1 ? floor(guests * (1 - feeF) * 0.5) + 1 : 0, "The entry fee is steep"],
+    [nOn > 0 && gsOn == 0 ? floor(guests * 0.1) : 0, "I'd love a seat to watch the races"],
+    [nScen >= 8 ? floor(guests * 0.2) : 0, "This place is really pretty"]
+  ] + range(len(R)).map(i => [R[i].on && !pok[i] ? floor(guests * 0.15) + 1 : 0, "I'm not paying ${[R[i].p].map(pr)[0]} for ${R[i].n}"])
+    + range(len(R)).map(i => [R[i].on && frac[i] < 0.7 ? floor(guests * (1 - frac[i]) * 0.3) : 0, "${R[i].n} looks too dangerous"])
+    + range(len(R)).map(i => [R[i].on && R[i].risk > 1.5 ? floor(guests * 0.08 * R[i].risk) : 0, "I saw a nasty crash at ${R[i].n}"])
+    + range(len(R)).map(i => [R[i].bf > 0.2 ? floor(guests * R[i].bf * 0.5) + 1 : 0, "Half the karts at ${R[i].n} are broken"])
+    + range(len(R)).map(i => [R[i].on && R[i].exc >= 5 && pok[i] ? floor(guests * 0.12 * frac[i]) : 0, "${R[i].n} was amazing!"])
+    + range(len(R)).map(i => [queue[i] >= 60 ? floor(guests * 0.1) : 0, "The queue for ${R[i].n} is too long"])
+  ).filter(t => t[0] > 0).sortBy(t => -t[0])
+
+  // ---- the screen, in dp ----------------------------------------------------------------------------
+  let SW = screenWidth ?? 400
+  let SH = screenHeight ?? 800
+  let LS = SW > SH
+  let TOP = max(screenTop ?? 0, 8)
+  let INS = max(screenInset ?? 0, 12)
+  let PANH = LS ? 0 : clamp(floor(SH * 0.38), 260, 320)
+  let MAPW = LS ? SW - 330 : SW
+  let MAPH = LS ? SH : SH - PANH
+  let HUDH = TOP + 46
+  let TW0 = floor(min((MAPW - 16) / LS0, (MAPH - HUDH - 24) / (LS0 * 0.5 + 1.4)))
+  let TW = TW0 * zoom
+  let CXm = MAPW / 2
+  let CYm = HUDH + (MAPH - HUDH) / 2
+  // the middle of our land, in cell widths
+  let cxU = ((LX0 + LX1) / 2 - (LY0 + N) / 2) * 0.5
+  let cyU = ((LX0 + LX1) / 2 + (LY0 + N) / 2) * 0.25
+  let OX = CXm - cxU * TW + panX
+  let OY = CYm - (cyU - 0.3) * TW + panY
+  let PX = LS ? MAPW + 8 : 10
+  let PY = LS ? TOP + 8 : MAPH + 8
+  let PW = LS ? SW - MAPW - 16 : SW - 20
+  let PH = (LS ? SH - TOP - 8 : PANH - 8) - INS
+  let TBH = 34
+  let CY = PY + TBH + 8
+  let CW = (PW - 12) / 3
+  let CHh = 58
+  let BH = 40
+  let BY = PY + PH - BH
+  // the − and + of a stepper, and the row each sits on
+  let SX1 = PX + PW - 146
+  let SX2 = PX + PW - 42
+  let PRY = PY + 108
+  let KRY = PY + 148
+  let CRY = PY + 188
+  let HRY = PY + 78
+  let FRY = CY + 18
+  let MRY = CY + 56
+  let SRY = CY + 94
+  let LRY = CY + 132
+  let UI = {bg: "#14213a", card: "#1f2f52", card2: "#2a3d66", text: "#f7edd3", dim: "#a3b2d0", gold: "#f2b632", go: "#3d8b5a", warn: "#ff806b", map: "#173a3a"}
+
+  // ---- what's drawn on the map, in units of a cell's width, worked out once per change ----------
+  let cellQ = c => [[c % N, floor(c / N), 0], [c % N + 1, floor(c / N), 0], [c % N + 1, floor(c / N) + 1, 0], [c % N, floor(c / N) + 1, 0]].map(pj)
+  let ground = [
+    {p: [[0, N, 0], [N, N, 0], [N, N, -3], [0, N, -3]].map(pj), f: "#7a5536"},
+    {p: [[N, 0, 0], [N, N, 0], [N, N, -3], [N, 0, -3]].map(pj), f: "#5e4129"},
+    {p: [[0, 0, 0], [N, 0, 0], [N, N, 0], [0, N, 0]].map(pj), f: "#58893f"},
+    {p: [[LX0, LY0, 0], [LX1, LY0, 0], [LX1, N, 0], [LX0, N, 0]].map(pj), f: "#6cb04a"}
+  ] + range(NN).filter(c => isO[c] && (c % N + floor(c / N)) % 2 == 0 && !isW[c]).map(c => {p: [c].map(cellQ)[0], f: "#66a845"})
+    + range(NN).filter(c => isW[c]).map(c => {p: [c].map(cellQ)[0], f: isO[c] ? "#2f86b8" : "#2a6f98"})
+    + [{l: [[LX0, LY0, 0.5], [LX1, LY0, 0.5], [LX1, N, 0.5]].map(pj), s: "#8a6a44", w: 0.035}, {l: [[LX0, N, 0.5], [LX0, LY0, 0.5]].map(pj), s: "#8a6a44", w: 0.035}]
+  let pathPrims = flatten(paths.map(c => [
+    {p: [c].map(cellQ)[0], f: "#c9ad7c"},
+    {p: [[c % N + 0.1, floor(c / N) + 0.1, 0], [c % N + 0.9, floor(c / N) + 0.1, 0], [c % N + 0.9, floor(c / N) + 0.9, 0], [c % N + 0.1, floor(c / N) + 0.9, 0]].map(pj), f: "#dfc99c"}
+  ])) + range(len(paths) > 2 ? litter : 0).map(l => [paths[floor(hash(l, 3) * len(paths))]].map(c => [[c % N + 0.2 + hash(l, 4) * 0.6, floor(c / N) + 0.2 + hash(l, 5) * 0.6, 0]].map(pj)[0])[0]).map(q => {c: q, r: 0.025, f: ["#f7f2e8", "#e0533d", "#f2cf3c", "#6aa7d9"][floor(hash(q[0], q[1]) * 4)]})
+  let gate = [[6.95, 15.85, 0.14, 0.14, 0, 7.2, "#e0533d"]].map(boxF)[0] + [[7.91, 15.85, 0.14, 0.14, 0, 7.2, "#e0533d"]].map(boxF)[0]
+    + [{p: [[7, 15.92, 6.0], [8.05, 15.92, 6.0], [8.05, 15.92, 7.8], [7, 15.92, 7.8]].map(pj), f: "#f7f2e8"}]
+    + range(6).map(i => {p: [[7 + i * 0.175, 15.92, 6.0 + (i % 2) * 0.9], [7.175 + i * 0.175, 15.92, 6.0 + (i % 2) * 0.9], [7.175 + i * 0.175, 15.92, 6.9 + (i % 2) * 0.9], [7 + i * 0.175, 15.92, 6.9 + (i % 2) * 0.9]].map(pj), f: "#1d1d22"})
+  let wild = range(NN).filter(c => !isO[c] && !isW[c] && hash(c, 11) < 0.2).map(c => {d: c % N + floor(c / N) + 1, P: [[c % N, floor(c / N)]].map(q => [
+      {c: [[q[0] + 0.5, q[1] + 0.5, 0]].map(pj)[0], r: 0.16, f: "#00000030"},
+      {l: [[q[0] + 0.5, q[1] + 0.5, 0], [q[0] + 0.5, q[1] + 0.5, 2.5]].map(pj), s: "#6b4b2a", w: 0.06},
+      {c: [[q[0] + 0.5, q[1] + 0.5, 4.2 + hash(c, 1)]].map(pj)[0], r: 0.24 + hash(c, 2) * 0.06, f: hash(c, 3) < 0.5 ? "#2c6a38" : "#35773d"}])[0]})
+  let iprim = items.map(it => [[it.c % N, floor(it.c / N), it.k]].map(q => q[2] <= 3 ? [[q[0] + 0.2, q[1] + 0.2, 0.6, 0.6, 0, 3, q[2] == 2 ? "#dfe8f0" : "#f3e6c4"]].map(boxF)[0]
+        + [{p: [[q[0] + 0.1, q[1] + 0.9, 3], [q[0] + 0.9, q[1] + 0.9, 3], [q[0] + 0.5, q[1] + 0.5, 6]].map(pj), f: mix(KD[q[2]].c, "#000000", 0.1)},
+           {p: [[q[0] + 0.9, q[1] + 0.1, 3], [q[0] + 0.9, q[1] + 0.9, 3], [q[0] + 0.5, q[1] + 0.5, 6]].map(pj), f: mix(KD[q[2]].c, "#000000", 0.3)},
+           {p: [[q[0] + 0.32, q[1] + 0.9, 3], [q[0] + 0.62, q[1] + 0.9, 3], [q[0] + 0.5, q[1] + 0.5, 6]].map(pj), f: "#fbf3df"},
+           {c: [[q[0] + 0.5, q[1] + 0.5, 7.4]].map(pj)[0], r: 0.11, f: KD[q[2]].c},
+           {c: [[q[0] + 0.5, q[1] + 0.5, 7.4]].map(pj)[0], r: 0.05, f: "#fbf3df"}]
+    : q[2] == 4 ? [[q[0] + 0.1, q[1] + 0.1, 1.8, 1.8, 0, 3.4, "#8a94a6"]].map(boxF)[0]
+        + [[q[0] + 0.1, q[1] + 0.1, 1.8, 1.8, 3.4, 0.6, "#e0533d"]].map(boxF)[0]
+        + [{p: [[q[0] + 0.35, q[1] + 1.9, 0], [q[0] + 1.6, q[1] + 1.9, 0], [q[0] + 1.6, q[1] + 1.9, 2.4], [q[0] + 0.35, q[1] + 1.9, 2.4]].map(pj), f: "#3b4252"},
+           {p: [[q[0] + 1.9, q[1] + 0.45, 0], [q[0] + 1.9, q[1] + 1.55, 0], [q[0] + 1.9, q[1] + 1.55, 2.4], [q[0] + 1.9, q[1] + 0.45, 2.4]].map(pj), f: "#2f3542"},
+           {l: [[q[0] + 0.35, q[1] + 1.9, 0.8], [q[0] + 1.6, q[1] + 1.9, 0.8]].map(pj), s: "#5a6375", w: 0.02},
+           {l: [[q[0] + 0.35, q[1] + 1.9, 1.6], [q[0] + 1.6, q[1] + 1.9, 1.6]].map(pj), s: "#5a6375", w: 0.02}]
+    : q[2] == 5 ? [[q[0] + 0.1, q[1] + 0.1, 1.8, 1.8, 0, 1.3, "#9aa3b5"]].map(boxF)[0]
+        + [[q[0] + 0.1, q[1] + 0.1, 1.8, 1.2, 1.3, 1.3, "#aab3c5"]].map(boxF)[0]
+        + [[q[0] + 0.1, q[1] + 0.1, 1.8, 0.6, 2.6, 1.3, "#bac3d5"]].map(boxF)[0]
+        + flatten(range(3).map(r => range(4).map(p => {c: [[q[0] + 0.35 + p * 0.45, q[1] + 1.65 - r * 0.6, 1.9 + r * 1.3]].map(pj)[0], r: 0.07, f: KCOL[floor(hash(it.c, r, p) * 8)]})))
+        + [{l: [[q[0] + 0.15, q[1] + 1.2, 0], [q[0] + 0.15, q[1] + 1.2, 6.2]].map(pj), s: "#c9d2e0", w: 0.04},
+           {l: [[q[0] + 1.85, q[1] + 1.2, 1.3], [q[0] + 1.85, q[1] + 1.2, 6.2]].map(pj), s: "#c9d2e0", w: 0.04},
+           {p: [[q[0] + 0.05, q[1] + 0.05, 6.4], [q[0] + 1.95, q[1] + 0.05, 6.4], [q[0] + 1.95, q[1] + 1.35, 6.0], [q[0] + 0.05, q[1] + 1.35, 6.0]].map(pj), f: "#c94f4f"},
+           {p: [[q[0] + 0.05, q[1] + 1.35, 6.0], [q[0] + 1.95, q[1] + 1.35, 6.0], [q[0] + 1.95, q[1] + 1.35, 5.4], [q[0] + 0.05, q[1] + 1.35, 5.4]].map(pj), f: "#f7edd3"}]
+    : q[2] == 6 ? [[0.3, 0.5], [0.5, 0.3], [0.5, 0.7], [0.7, 0.5]].map(o => {c: [[q[0] + o[0], q[1] + o[1], 0.7]].map(pj)[0], r: 0.1, f: "#26262b"})
+        + [{c: [[q[0] + 0.5, q[1] + 0.5, 1.8]].map(pj)[0], r: 0.1, f: "#33333a"}, {c: [[q[0] + 0.5, q[1] + 0.5, 1.8]].map(pj)[0], r: 0.045, f: "#e0533d"}]
+    : q[2] == 7 ? [{c: [[q[0] + 0.5, q[1] + 0.5, 0]].map(pj)[0], r: 0.16, f: "#00000030"}, {l: [[q[0] + 0.5, q[1] + 0.5, 0], [q[0] + 0.5, q[1] + 0.5, 2.5]].map(pj), s: "#6b4b2a", w: 0.06},
+        {c: [[q[0] + 0.5, q[1] + 0.5, 4.2 + hash(it.c, 1)]].map(pj)[0], r: 0.24 + hash(it.c, 2) * 0.06, f: hash(it.c, 3) < 0.5 ? "#2f7a3e" : "#3d8b45"},
+        {c: [[q[0] + 0.42, q[1] + 0.5, 5 + hash(it.c, 1)]].map(pj)[0], r: 0.12, f: "#5fb048"}]
+    : q[2] == 8 ? [{p: [[q[0] + 0.12, q[1] + 0.12, 0.2], [q[0] + 0.88, q[1] + 0.12, 0.2], [q[0] + 0.88, q[1] + 0.88, 0.2], [q[0] + 0.12, q[1] + 0.88, 0.2]].map(pj), f: "#3a8a3a"}]
+        + range(7).map(f => {c: [[q[0] + 0.25 + hash(it.c, f) * 0.5, q[1] + 0.25 + hash(it.c, f, 1) * 0.5, 0.5]].map(pj)[0], r: 0.045, f: ["#e86fb0", "#f2cf3c", "#f7edd3", "#e0533d", "#b58be6"][f % 5]})
+    : q[2] == 9 ? [[q[0] + 0.4, q[1] + 0.4, 0.2, 0.2, 0, 1.6, "#4c9b6a"]].map(boxF)[0]
+    : q[2] == 10 ? [{p: [[q[0] + 0.5, q[1] + 0.5, 0.42, 0]].map(ellF)[0], f: "#9aa3b5"}, {p: [[q[0] + 0.5, q[1] + 0.5, 0.42, 0.6]].map(ellF)[0], f: "#c0c8d6"}, {p: [[q[0] + 0.5, q[1] + 0.5, 0.33, 0.6]].map(ellF)[0], f: "#4fa3d8"},
+        {l: [[q[0] + 0.5, q[1] + 0.5, 0.6], [q[0] + 0.5, q[1] + 0.5, 3.4]].map(pj), s: "#bfe6ff", w: 0.05}]
+    : [{l: [[q[0] + 0.5, q[1] + 0.5, 0], [q[0] + 0.5, q[1] + 0.5, 5.4]].map(pj), s: "#e8e4d8", w: 0.035},
+       {p: [[q[0] + 0.5, q[1] + 0.5, 5.4], [q[0] + 1.0, q[1] + 0.5, 4.7], [q[0] + 0.5, q[1] + 0.5, 4.0]].map(pj), f: ["#e0533d", "#f2b632", "#3fb6a8", "#4f8fd6"][floor(hash(it.c, 4) * 4)]}])[0])
+  // back to front: what stands nearer the viewer covers what's behind
+  let dAll = (range(len(items)).map(i => {d: items[i].c % N + floor(items[i].c / N) + 2 * KD[items[i].k].w - 1, P: iprim[i]})
+    + flatten(range(len(tracks)).map(j => range(len(tracks[j].t)).map(k => {d: tracks[j].t[k][0] % N + floor(tracks[j].t[k][0] / N) + 1.05 + tracks[j].t[k][1] * 0.02, P: ts[j].prims[k]})))
+    + wild).sortBy(e => e.d)
+  let world = [ground, pathPrims] + dAll.map(e => e.P) + [gate]
+  let dia = c => [[c % N, floor(c / N), 0], [c % N + 1, floor(c / N), 0], [c % N + 1, floor(c / N) + 1, 0], [c % N, floor(c / N) + 1, 0], [c % N, floor(c / N), 0]].map(pj)
+  // the track's next piece: where it can go, and how high
+  let cAct = c => !isO[c] ? {a: 0, m: "Buy this land first (Park)"}
+    : bi < 0 ? (own[c] < 0 && !isP[c] && !isW[c] && len(lv[c]) == 0 ? {a: 1, m: ""} : {a: 0, m: "The start line needs clear, dry ground"})
+    : c == bt[0][0] && bn >= 2 ? (bn < 10 ? {a: 0, m: "A track needs at least 10 pieces"} : !any(nbs[c], n => n == bl[0]) ? {a: 0, m: "Bring the track back to the start line"} : bl[1] > 1 ? {a: 0, m: "Come down to level 1 first"} : {a: 3, m: ""})
+    : !any(nbs[bl[0]], n => n == c) ? {a: 0, m: "Carry on from the end of the track"}
+    : bn == 2 && c - bt[1][0] != bt[1][0] - bt[0][0] ? {a: 0, m: "The start is 3 straight pieces"}
+    : own[c] >= 0 ? {a: 0, m: "That cell is taken"}
+    : isP[c] && nextZ < 2 ? {a: 0, m: "Raise the track to level 2 to bridge a path"}
+    : isW[c] && nextZ < 1 ? {a: 0, m: "Raise the track to cross water"}
+    : any(lv[c], z => abs(z - nextZ) < 2) ? {a: 0, m: "A bridge needs 2 levels over the track below"}
+    : {a: 2, m: ""}
+  let overlay = tool == 20 ? (bi < 0 ? free.map(c => {c: [[c % N + 0.5, floor(c / N) + 0.5, 0]].map(pj)[0], r: 0.05, f: "#ffffffaa"})
+      : nbs[bl[0]].filter(c => [c].map(cAct)[0].a >= 2).map(c => {l: [c].map(dia)[0].map(v => [v[0], v[1] - ([c].map(cAct)[0].a == 3 ? 0 : nextZ * LZ) * HZ]), s: "#f2b632", w: 0.04})
+        + [{c: [[bl[0] % N + 0.5, floor(bl[0] / N) + 0.5, bl[1] * LZ + 0.3]].map(pj)[0], r: 0.08, f: "#f2b632"}])
+    : tool >= 0 && tool <= 12 ? free.map(c => {c: [[c % N + 0.5, floor(c / N) + 0.5, 0]].map(pj)[0], r: 0.05, f: "#ffffffaa"})
+    : sel >= 1000 ? tracks[sel - 1000].t.take(3).map(t => {l: [t[0]].map(dia)[0], s: "#f2b632", w: 0.04})
+    : sel >= 0 ? [[items[sel]].map(foot)[0]].map(F => [{l: [[F[0] % N, floor(F[0] / N), 0], [last(F) % N + 1, floor(F[0] / N), 0], [last(F) % N + 1, floor(last(F) / N) + 1, 0], [F[0] % N, floor(last(F) / N) + 1, 0], [F[0] % N, floor(F[0] / N), 0]].map(pj), s: "#f2b632", w: 0.04}])[0]
+    : []
+
+  // ---- the guests ---------------------------------------------------------------------------------
+  let routeOf = d => reverse(reduce(range(dist[d]), (Rr, s) => Rr + [first(nbs[last(Rr)].filter(n => dist[n] >= 0 && dist[n] == dist[last(Rr)] - 1))], [d]))
+  let cellP = c => [(c % N - floor(c / N)) * 0.5, (c % N + floor(c / N) + 1) * 0.25]
+  let dests = range(len(items)).filter(i => KD[items[i].k].t == 1 && itemDoor[i] >= 0 && items[i].o).map(i => {r: [[-4.55, 6.02]] + [itemDoor[i]].map(routeOf)[0].map(cellP), shop: true})
+    + range(len(tracks)).filter(j => trDoor[j] >= 0 && tracks[j].o && tracks[j].d).map(j => {r: [[-4.55, 6.02]] + [trDoor[j]].map(routeOf)[0].map(cellP), shop: false})
+  let SHIRTS = ["#e0533d", "#3fb6a8", "#f2b632", "#8c6bd6", "#4f8fd6", "#e86fb0", "#f7edd3", "#79d48f"]
+  let SKIN = ["#f1c9a5", "#d9a27a", "#a86b45", "#7a4a2c", "#ffd9bd"]
+  let crowd = range(len(dests) > 0 ? min(guests, 8) : 0).map(k => {o: hash(k, 1), dx: (hash(k, 3) - hash(k, 4)) * 0.18, dy: (hash(k, 3) + hash(k, 4) - 1) * 0.09, shirt: SHIRTS[floor(hash(k, 5) * 8)], skin: SKIN[floor(hash(k, 6) * 5)], cap: hasS[3] > 0 && hash(k, 7) < 0.4, cc: SHIRTS[floor(hash(k, 8) * 6)]})
+  // what the karts draw: per track, whether they run, how many, and how many sit broken in the pits
+  let kartRun = range(len(tracks)).map(j => tracks[j].d && trR[j] >= 0 && R[trR[j]].on)
+
+  Box {
+    fill: true
+    background: UI.bg
+
+    // ---- what only changes when the attraction does: the map ----
+    Canvas {
+      fill: true
+      rect(0, 0, MAPW, MAPH, fill: UI.map)
+      clip(0, 0, MAPW, MAPH) {
+        translate(OX, OY) {
+          scale(TW, TW, 0, 0) {
+            for L in world {
+              for s in L {
+                if s.p != null {
+                  path(s.p, closed: true, fill: s.f)
+                } else if s.l != null {
+                  path(s.l, stroke: s.s, width: s.w, cap: round)
+                } else {
+                  circle(s.c[0], s.c[1], s.r, fill: s.f)
+                }
+              }
+            }
+            for s in overlay {
+              if s.l != null {
+                path(s.l, stroke: s.s, width: s.w, cap: round)
+              } else {
+                circle(s.c[0], s.c[1], s.r, fill: s.f)
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // ---- the panel: its words change more often than the map ----
+    Canvas {
+      fill: true
+      rect(LS ? MAPW : 0, LS ? 0 : MAPH, LS ? SW - MAPW : SW, LS ? SH : SH - MAPH, fill: UI.bg)
+      rect(LS ? MAPW : 0, LS ? 0 : MAPH, LS ? 3 : SW, LS ? SH : 3, fill: UI.gold)
+      if tool == 20 {
+        text("Track builder", PX + 2, PY + 14, size: 17, color: UI.text, bold: true)
+        text(bi < 0 ? "Tap clear ground for the start line" : bn < 3 ? "Lay ${3 - bn} more straight start piece${bn == 2 ? "" : "s"}" : any(nbs[bl[0]], n => n == bt[0][0]) && bn >= 10 && bl[1] <= 1 ? "Tap the start line to open the track" : "Tap or drag next to the gold dot", PX + 2, PY + 40, size: 13, color: UI.gold)
+        text("Next piece level", PX + 2, HRY, size: 14, color: UI.text)
+        rect(SX1, HRY - 16, 40, 32, fill: UI.card2, radius: 6 * corners)
+        rect(SX2, HRY - 16, 40, 32, fill: UI.card2, radius: 6 * corners)
+        text("−", SX1 + 20, HRY, size: 20, color: UI.text, align: center, bold: true)
+        text("+", SX2 + 20, HRY, size: 20, color: UI.text, align: center, bold: true)
+        text("${nextZ}", (SX1 + SX2 + 40) / 2, HRY, size: 18, color: UI.gold, align: center, bold: true)
+        text(bn < 3 ? "Ramps climb or drop 1 level a piece" : "Aiming for ${bh} · 2 levels clear a track or path", PX + 2, HRY + 30, size: 12, color: UI.dim)
+        if bi >= 0 {
+          text("${bn} pieces · spent ${[tracks[bi].sp].map(cash)[0]} · next ${[pieceCost].map(cash)[0]}", PX + 2, HRY + 52, size: 12, color: UI.dim)
+        } else {
+          text("The start line comes with 2 rookie karts: $700", PX + 2, HRY + 52, size: 12, color: UI.dim)
+        }
+        for b in range(3) {
+          rect(PX + b * (PW + 6) / 3, BY, (PW - 12) / 3, BH, fill: b == 1 ? (arm ? "#e0533d" : "#5a2a2f") : b == 2 ? UI.go : UI.card2, radius: 6 * corners)
+          text([bi >= 0 ? "Undo piece" : "—", arm ? "Tap to confirm" : "Scrap", "Done"][b], PX + b * (PW + 6) / 3 + (PW - 12) / 6, BY + BH / 2, size: 13, color: UI.text, align: center, bold: true)
+        }
+      } else if sel >= 1000 {
+        let j = sel - 1000
+        let co = tracks[j]
+        text(TN[co.n % 8], PX + 2, PY + 14, size: 17, color: UI.text, bold: true)
+        text("✕", PX + PW - 14, PY + 14, size: 16, color: UI.dim, align: center)
+        if !co.d {
+          text("Still being built. Pick Track to carry on.", PX + 2, PY + 40, size: 13, color: UI.dim)
+          rect(PX, BY, PW, BH, fill: arm ? "#e0533d" : "#5a2a2f", radius: 6 * corners)
+          text(arm ? "Tap to confirm" : "Scrap +${[co.sp].map(cash)[0]}", PX + PW / 2, BY + BH / 2, size: 13, color: UI.text, align: center, bold: true)
+        } else {
+          let r = R[ri]
+          let S = ts[j]
+          let w = wear[j] ?? 0
+          text("Excitement ${fixed(r.exc, 1)} ${[r.exc].map(excL)[0]} · Difficulty ${fixed(r.diff, 1)} ${[r.diff].map(difL)[0]}", PX + 2, PY + 38, size: 13, color: UI.gold)
+          text("${S.n * 20} m · lap ${fixed(S.lap * 2, 1)} s · top ${round(S.mx * 18)} km/h · ${S.cr} crossing${S.cr == 1 ? "" : "s"}", PX + 2, PY + 58, size: 12, color: UI.dim)
+          text(!r.on ? (r.kw == 0 ? "All karts broken: repair them" : !co.o ? "Closed" : "No path reaches the start line") : "${round(riders[ri] * 60 * SPEED)} drivers a minute · queue ${queue[ri]} · ${[riders[ri] * (r.p - r.fuel) * 60 * SPEED].map(cash)[0]}/min", PX + 2, PY + 78, size: 12, color: r.on ? UI.text : UI.warn)
+          text("Ticket", PX + 2, PRY - 6, size: 14, color: UI.text)
+          text(pok[ri] ? "worth up to ${[r.val * 1.6 + 0.5].map(pr)[0]}" : "guests think it's too dear", PX + 2, PRY + 12, size: 11, color: pok[ri] ? UI.dim : UI.warn)
+          text("${KC[co.cl].n} karts", PX + 2, KRY - 6, size: 14, color: UI.text)
+          text("${r.kw} running · ${[KC[co.cl].cost].map(cash)[0]} each", PX + 2, KRY + 12, size: 11, color: r.kw < co.k ? UI.warn : UI.dim)
+          for row in [[PRY, [co.p].map(pr)[0]], [KRY, "${co.k}"]] {
+            rect(SX1, row[0] - 16, 40, 32, fill: UI.card2, radius: 6 * corners)
+            rect(SX2, row[0] - 16, 40, 32, fill: UI.card2, radius: 6 * corners)
+            text("−", SX1 + 20, row[0], size: 20, color: UI.text, align: center, bold: true)
+            text("+", SX2 + 20, row[0], size: 20, color: UI.text, align: center, bold: true)
+            text(row[1], (SX1 + SX2 + 40) / 2, row[0], size: 18, color: UI.gold, align: center, bold: true)
+          }
+          text("Condition", PX + 2, CRY - 6, size: 14, color: UI.text)
+          rect(PX + 2, CRY + 8, SX1 - PX - 16, 6, fill: UI.card2, radius: 3)
+          rect(PX + 2, CRY + 8, (SX1 - PX - 16) * (100 - w) / 100, 6, fill: w < 40 ? "#79d48f" : w < 70 ? UI.gold : UI.warn, radius: 3)
+          text("${round(100 - w)}%", PX + 104, CRY - 6, size: 13, color: w < 40 ? UI.dim : UI.warn, bold: true)
+          rect(SX1, CRY - 16, SX2 + 40 - SX1, 32, fill: w >= 1 ? UI.card2 : UI.card, radius: 6 * corners)
+          text(w >= 1 ? "Repair ${[[j].map(repairC)[0]].map(cash)[0]}" : "Like new", (SX1 + SX2 + 40) / 2, CRY, size: 13, color: w >= 1 ? UI.text : UI.dim, align: center, bold: true)
+          for b in range(3) {
+            rect(PX + b * (PW + 6) / 3, BY, (PW - 12) / 3, BH, fill: b == 2 ? (arm ? "#e0533d" : "#5a2a2f") : UI.card2, radius: 6 * corners)
+          }
+          text(co.o ? "Close" : "Open", PX + (PW - 12) / 6, BY + BH / 2, size: 13, color: UI.text, align: center, bold: true)
+          text(co.cl >= 2 ? "Top karts" : "${KC[co.cl + 1].n} ${[co.k * KC[co.cl + 1].cost - floor(co.k * KC[co.cl].cost / 2)].map(cash)[0]}", PX + (PW + 6) / 3 + (PW - 12) / 6, BY + BH / 2, size: 13, color: co.cl >= 2 ? UI.dim : UI.text, align: center, bold: true)
+          text(arm ? "Confirm" : "Sell +${[floor(co.sp / 2)].map(cash)[0]}", PX + 2 * (PW + 6) / 3 + (PW - 12) / 6, BY + BH / 2, size: 13, color: UI.text, align: center, bold: true)
+        }
+      } else if sel >= 0 {
+        let it = items[sel]
+        let isShop = KD[it.k].t == 1
+        text(KD[it.k].n, PX + 2, PY + 14, size: 17, color: UI.text, bold: true)
+        text("✕", PX + PW - 14, PY + 14, size: 16, color: UI.dim, align: center)
+        if isShop {
+          text(itemDoor[sel] < 0 ? "No path reaches it" : !it.o ? "Closed" : "${round(shopRate[sel] * 60 * SPEED)} customers a minute · ${[shopRate[sel] * it.p * 60 * SPEED].map(cash)[0]}/min", PX + 2, PY + 40, size: 12, color: itemDoor[sel] < 0 ? UI.warn : UI.text)
+          text(it.p > KD[it.k].fair * 2 + 0.5 ? "Guests think it's too dear" : "Guests pay up to ${[KD[it.k].fair * 2 + 0.5].map(pr)[0]}", PX + 2, PY + 62, size: 12, color: it.p > KD[it.k].fair * 2 + 0.5 ? UI.warn : UI.dim)
+          text("Price", PX + 2, PRY, size: 14, color: UI.text)
+          rect(SX1, PRY - 16, 40, 32, fill: UI.card2, radius: 6 * corners)
+          rect(SX2, PRY - 16, 40, 32, fill: UI.card2, radius: 6 * corners)
+          text("−", SX1 + 20, PRY, size: 20, color: UI.text, align: center, bold: true)
+          text("+", SX2 + 20, PRY, size: 20, color: UI.text, align: center, bold: true)
+          text([it.p].map(pr)[0], (SX1 + SX2 + 40) / 2, PRY, size: 18, color: UI.gold, align: center, bold: true)
+          rect(PX, BY, (PW - 6) / 2, BH, fill: UI.card2, radius: 6 * corners)
+          text(it.o ? "Close" : "Open", PX + (PW - 6) / 4, BY + BH / 2, size: 13, color: UI.text, align: center, bold: true)
+        } else {
+          text(it.k == 4 ? "Mechanics work from here, 3 to a workshop" : it.k == 5 ? (any(flatten([it].map(foot)[0].map(c => nbs[c])), c => len(lv[c]) > 0) ? "Fans watch the races and tell their friends" : "Put it beside a track for the fans to watch") : it.k == 6 ? "Beside a corner, it keeps crashes harmless" : it.k == 9 ? "Guests drop their litter in it" : "Decorations raise the rating", PX + 2, PY + 40, size: 13, color: UI.dim)
+        }
+        rect(isShop ? PX + (PW + 6) / 2 : PX, BY, isShop ? (PW - 6) / 2 : PW, BH, fill: arm ? "#e0533d" : "#5a2a2f", radius: 6 * corners)
+        text(arm ? "Tap to confirm" : "Sell +${[floor(it.sp / 2)].map(cash)[0]}", isShop ? PX + (PW + 6) / 2 + (PW - 6) / 4 : PX + PW / 2, BY + BH / 2, size: 13, color: UI.text, align: center, bold: true)
+      } else {
+        for t in range(5) {
+          rect(PX + t * PW / 5 + 2, PY, PW / 5 - 4, TBH, fill: tab == t ? UI.gold : UI.card, radius: 6 * corners)
+          text(TABN[t], PX + t * PW / 5 + PW / 10, PY + TBH / 2, size: 12, color: tab == t ? UI.bg : UI.text, align: center, bold: true)
+        }
+        if tab < 4 {
+          for k, j in TABK[tab] {
+            let cx = PX + j % 3 * (CW + 6)
+            let cy = CY + floor(j / 3) * (CHh + 6)
+            rect(cx, cy, CW, CHh, fill: tool == k ? UI.card2 : UI.card, radius: 6 * corners)
+            if tool == k { rect(cx + 1, cy + 1, CW - 2, CHh - 2, stroke: UI.gold, width: 2, radius: 6 * corners) }
+            rect(cx + 10, cy + 12, 14, 14, fill: k == 20 ? "#474c57" : k == 12 ? "#dfc99c" : KD[k].c, radius: 4)
+            text(k == 20 ? "Kart track" : k == 12 ? "Footpath" : KD[k].n, cx + 10, cy + 40, size: 12, color: UI.text, bold: true)
+            text(k == 20 ? "from $700" : k == 12 ? "$10 a cell" : [KD[k].cost].map(cash)[0], cx + 30, cy + 19, size: 11, color: UI.gold)
+          }
+          text(tab == 0 ? "Lay a track; tyre walls by its corners stop crashes." : tab == 1 ? "Shops sell to every guest. They need a path." : tab == 2 ? "Gardens raise the rating; bins keep litter down." : "Tap or drag on grass to lay path, tap a path to lift it.", PX + 2, CY + (tab == 0 || tab == 2 ? 2 : 1) * (CHh + 6) + 14, size: 12, color: UI.dim)
+        } else {
+          text("Entry fee", PX + 2, FRY - 6, size: 14, color: UI.text)
+          text(feeF < 1 ? "too steep for this place" : "guests think it's fair", PX + 2, FRY + 11, size: 11, color: feeF < 1 ? UI.warn : UI.dim)
+          text("Mechanics", PX + 2, MRY - 6, size: 14, color: UI.text)
+          text(mechMax == 0 ? "build a workshop first" : "${round(cov * 100)}% of ${kTot} karts looked after", PX + 2, MRY + 11, size: 11, color: cov < 0.6 && kTot > 0 ? UI.warn : UI.dim)
+          text("Handymen", PX + 2, SRY - 6, size: 14, color: UI.text)
+          text("${litter} litter on the paths", PX + 2, SRY + 11, size: 11, color: litter > 8 ? UI.warn : UI.dim)
+          for row in [[FRY, "$${fee}"], [MRY, "${mech}"], [SRY, "${staff}"]] {
+            rect(SX1, row[0] - 16, 40, 32, fill: UI.card2, radius: 6 * corners)
+            rect(SX2, row[0] - 16, 40, 32, fill: UI.card2, radius: 6 * corners)
+            text("−", SX1 + 20, row[0], size: 20, color: UI.text, align: center, bold: true)
+            text("+", SX2 + 20, row[0], size: 20, color: UI.text, align: center, bold: true)
+            text(row[1], (SX1 + SX2 + 40) / 2, row[0], size: 16, color: UI.gold, align: center, bold: true)
+          }
+          text("Land", PX + 2, LRY - 6, size: 14, color: UI.text)
+          text(land >= 4 ? "${LS0}×${LS0}, the whole plot" : "${LS0}×${LS0}, next ${LS0 + 2}×${LS0 + 2}", PX + 2, LRY + 11, size: 11, color: UI.dim)
+          rect(SX1, LRY - 16, SX2 + 40 - SX1, 32, fill: land >= 4 ? UI.card : UI.go, radius: 6 * corners)
+          text(land >= 4 ? "All yours" : "Buy ${[LANDC[land + 1]].map(cash)[0]}", (SX1 + SX2 + 40) / 2, LRY, size: 13, color: land >= 4 ? UI.dim : UI.text, align: center, bold: true)
+          text("What the guests are thinking", PX + 2, LRY + 34, size: 11, color: UI.gold, bold: true)
+          if len(thoughts) == 0 {
+            text(guests == 0 ? "No guests yet. Build a track by a path." : "Everyone's happy.", PX + 2, LRY + 54, size: 12, color: UI.dim)
+          }
+          for t, i in thoughts.take(max(0, floor((PY + PH - LRY - 44) / 19))) {
+            text(t[1], PX + 2, LRY + 54 + i * 19, size: 12, color: UI.text)
+            text("${t[0]}", PX + PW - 4, LRY + 54 + i * 19, size: 12, color: UI.dim, align: end)
+          }
+        }
+      }
+    }
+
+    // ---- the numbers along the top: they change once a second, so they're not redrawn every frame ----
+    Canvas {
+      fill: true
+      rect(0, 0, MAPW, HUDH, fill: "#14213ae6")
+      rect(0, HUDH - 2, MAPW, 2, fill: UI.gold)
+      text(hudCash, 14, TOP + 14, size: 17, color: coins < 0 ? UI.warn : UI.text, bold: true)
+      text(hudRate, 14, TOP + 32, size: 11, color: rate >= 0 ? UI.dim : UI.warn)
+      text(hudGuests, MAPW * 0.42, TOP + 14, size: 17, color: UI.text, bold: true, align: center)
+      text("guests", MAPW * 0.42, TOP + 32, size: 11, color: UI.dim, align: center)
+      text(hudRating, MAPW * 0.62, TOP + 14, size: 17, color: rating < 400 ? UI.warn : rating < 600 ? UI.gold : "#79d48f", bold: true, align: center)
+      text("rating", MAPW * 0.62, TOP + 32, size: 11, color: UI.dim, align: center)
+      rect(MAPW - 100, TOP + 8, 42, 30, fill: UI.card2, radius: 6 * corners)
+      text(zoom == 1 ? "2×" : "1×", MAPW - 79, TOP + 23, size: 13, color: UI.text, align: center, bold: true)
+      rect(MAPW - 52, TOP + 8, 42, 30, fill: tab == 4 && tool < 0 && sel < 0 ? UI.gold : UI.card2, radius: 6 * corners)
+      text("Park", MAPW - 31, TOP + 23, size: 12, color: tab == 4 && tool < 0 && sel < 0 ? UI.bg : UI.text, align: center, bold: true)
+    }
+
+    // ---- what moves: karts, guests, and messages ----
+    Canvas {
+      fill: true
+      ripple: false
+
+      onTap: {
+        if x < MAPW && y < MAPH {
+          if y < HUDH {
+            if x > MAPW - 102 && x < MAPW - 56 {
+              zoom = zoom == 1 ? 2 : 1
+              panX = 0
+              panY = 0
+            } else if x >= MAPW - 52 {
+              tab = 4
+              tool = -1
+              sel = -1
+              arm = false
+            }
+          } else {
+            let lift = tool == 20 && bn >= 3 ? nextZ * LZ * HZ : 0
+            let ux = (x - OX) / TW
+            let uy = (y - OY) / TW + lift
+            let gx = floor(2 * uy + ux)
+            let gy = floor(2 * uy - ux)
+            let cell = gy * N + gx
+            let inMap = gx >= 0 && gx < N && gy >= 0 && gy < N
+            arm = false
+            if tool == 20 {
+              if inMap {
+                let a0 = [cell].map(cAct)[0]
+                let a = a0.a == 1 && coins < 700 || a0.a == 2 && coins < pieceCost ? {a: 0, m: "Not enough cash"} : a0
+                if a.a == 1 {
+                  bank = coins - 700
+                  since = tnow
+                  wear = range(len(tracks)).map(j => wear[j] ?? 0) + [0]
+                  tracks = tracks + [{t: [[cell, 0]], d: false, p: 3, o: true, sp: 700, n: len(tracks) + floor(hash(cell, len(paths)) * 3), k: 2, cl: 0}]
+                  haptic()
+                } else if a.a == 2 {
+                  bank = coins - pieceCost
+                  since = tnow
+                  tracks = set(tracks, bi, merge(tracks[bi], {t: bt + [[cell, nextZ]], sp: tracks[bi].sp + pieceCost}))
+                } else if a.a == 3 {
+                  let b0 = bi
+                  msg = "${TN[tracks[b0].n % 8]} is open!"
+                  tracks = set(tracks, b0, merge(tracks[b0], {d: true, p: max(3, round(ts[b0].exc * 1.2 + 2))}))
+                  msgT = time
+                  tool = -1
+                  sel = 1000 + b0
+                  haptic()
+                } else if a.m != "" {
+                  msg = a.m
+                  msgT = time
+                }
+              }
+            } else if tool == 12 {
+              if inMap {
+                if isP[cell] {
+                  if cell != GC && cell != GC - N {
+                    bank = coins + 5
+                    since = tnow
+                    paths = paths.filter(c => c != cell)
+                  }
+                } else if !isO[cell] {
+                  msg = "Buy this land first (Park)"
+                  msgT = time
+                } else if own[cell] < 0 && !isW[cell] && all(lv[cell], z => z >= 2) {
+                  if coins >= 10 {
+                    bank = coins - 10
+                    since = tnow
+                    paths = paths + [cell]
+                  } else {
+                    msg = "Not enough cash"
+                    msgT = time
+                  }
+                } else if len(lv[cell]) > 0 {
+                  msg = "Paths go under bridges of level 2 or more"
+                  msgT = time
+                }
+              }
+            } else if tool >= 0 {
+              let w = KD[tool].w
+              let fit = (w == 1 ? [cell] : [cell, cell - 1, cell - N, cell - N - 1]).filter(a => inMap && a >= 0 && a % N <= gx && a % N <= N - w && floor(a / N) <= N - w && all(w == 1 ? [a] : [a, a + 1, a + N, a + N + 1], c => isO[c] && own[c] < 0 && !isP[c] && !isW[c] && len(lv[c]) == 0))
+              if !inMap {
+                sel = -1
+              } else if !isO[cell] {
+                msg = "Buy this land first (Park)"
+                msgT = time
+              } else if len(fit) == 0 {
+                msg = "No room here"
+                msgT = time
+              } else if coins < KD[tool].cost {
+                msg = "Not enough cash"
+                msgT = time
+              } else {
+                bank = coins - KD[tool].cost
+                since = tnow
+                items = items + [{c: fit[0], k: tool, p: KD[tool].p ?? 0, o: true, sp: KD[tool].cost}]
+                if KD[tool].t == 1 && ![[fit[0], tool]].map(q => any(nbs[q[0]], n => dist[n] >= 0))[0] {
+                  msg = "Lay a path to it from the gate"
+                  msgT = time
+                }
+                haptic()
+              }
+            } else {
+              let cand = range(5).map(d => [gx + d, gy + d]).filter(q => q[0] >= 0 && q[0] < N && q[1] >= 0 && q[1] < N).map(q => own[q[1] * N + q[0]] >= 0 ? own[q[1] * N + q[0]] : trk[q[1] * N + q[0]] >= 0 ? 1000 + trk[q[1] * N + q[0]] : -1).filter(o => o >= 0)
+              sel = first(cand) ?? -1
+            }
+          }
+        } else if tool == 20 {
+          if y >= BY && y <= BY + BH {
+            let b = floor((x - PX) / ((PW + 6) / 3))
+            if b == 0 && bi >= 0 {
+              arm = false
+              let back = [[bn - 1, bl[1]]].map(costAt)[0]
+              bank = coins + back
+              since = tnow
+              if bn <= 1 {
+                tracks = remove(tracks, bi)
+                wear = len(wear) > bi ? remove(wear, bi) : wear
+              } else {
+                tracks = set(tracks, bi, merge(tracks[bi], {t: bt.take(bn - 1), sp: tracks[bi].sp - back}))
+              }
+            } else if b == 1 {
+              if arm && bi >= 0 {
+                bank = coins + tracks[bi].sp
+                since = tnow
+                tracks = remove(tracks, bi)
+                wear = len(wear) > bi ? remove(wear, bi) : wear
+                arm = false
+              } else {
+                arm = bi >= 0
+              }
+            } else if b == 2 {
+              tool = -1
+              arm = false
+            }
+          } else if y >= HRY - 18 && y <= HRY + 18 {
+            if x >= SX1 && x < SX1 + 44 { bh = max(0, min(bh, nextZ) - 1) }
+            if x >= SX2 - 4 && x < SX2 + 44 { bh = min(4, max(bh, nextZ) + 1) }
+          }
+        } else if sel >= 1000 {
+          let j = sel - 1000
+          let co = tracks[j]
+          if x >= PX + PW - 36 && y < PY + 32 {
+            sel = -1
+            arm = false
+          } else if !co.d {
+            if y >= BY && y <= BY + BH {
+              if arm {
+                bank = coins + co.sp
+                since = tnow
+                tracks = remove(tracks, j)
+                wear = len(wear) > j ? remove(wear, j) : wear
+                sel = -1
+                arm = false
+              } else {
+                arm = true
+              }
+            }
+          } else if y >= BY && y <= BY + BH {
+            let b = floor((x - PX) / ((PW + 6) / 3))
+            if b == 0 {
+              arm = false
+              tracks = set(tracks, j, merge(co, {o: !co.o}))
+            } else if b == 1 {
+              arm = false
+              let up = co.cl >= 2 ? 0 : co.k * KC[co.cl + 1].cost - floor(co.k * KC[co.cl].cost / 2)
+              if co.cl >= 2 {
+                msg = "These are the best karts there are"
+                msgT = time
+              } else if coins < up {
+                msg = "Not enough cash"
+                msgT = time
+              } else {
+                bank = coins - up
+                since = tnow
+                tracks = set(tracks, j, merge(co, {cl: co.cl + 1, sp: co.sp + up}))
+                wear = set(range(len(tracks)).map(q => wear[q] ?? 0), j, 0)
+                msg = "New ${KC[co.cl + 1].n} karts!"
+                msgT = time
+                haptic()
+              }
+            } else if arm {
+              bank = coins + floor(co.sp / 2)
+              since = tnow
+              tracks = remove(tracks, j)
+              wear = len(wear) > j ? remove(wear, j) : wear
+              sel = -1
+              arm = false
+            } else {
+              arm = true
+            }
+          } else if y >= PRY - 18 && y <= PRY + 18 {
+            arm = false
+            let np = x >= SX1 && x < SX1 + 44 ? max(0, co.p - 0.5) : x >= SX2 - 4 && x < SX2 + 44 ? min(30, co.p + 0.5) : co.p
+            bank = coins
+            since = tnow
+            tracks = set(tracks, j, merge(co, {p: np}))
+          } else if y >= KRY - 18 && y <= KRY + 18 {
+            arm = false
+            let kc = KC[co.cl].cost
+            if x >= SX1 && x < SX1 + 44 && co.k > 1 {
+              bank = coins + floor(kc / 2)
+              since = tnow
+              tracks = set(tracks, j, merge(co, {k: co.k - 1, sp: co.sp - kc}))
+            } else if x >= SX2 - 4 && x < SX2 + 44 {
+              if co.k >= 12 {
+                msg = "12 karts is the most a track takes"
+                msgT = time
+              } else if coins < kc {
+                msg = "Not enough cash"
+                msgT = time
+              } else {
+                bank = coins - kc
+                since = tnow
+                tracks = set(tracks, j, merge(co, {k: co.k + 1, sp: co.sp + kc}))
+              }
+            }
+          } else if y >= CRY - 18 && y <= CRY + 18 && x >= SX1 {
+            arm = false
+            let rc = [j].map(repairC)[0]
+            if (wear[j] ?? 0) < 1 {
+              msg = "The karts are like new"
+              msgT = time
+            } else if coins < rc {
+              msg = "Not enough cash"
+              msgT = time
+            } else {
+              let c0 = coins
+              let dt = clamp(tnow - wsince, 0, 3600)
+              wear = set(range(len(tracks)).map(q => clamp((wear[q] ?? 0) + dwr[q] * dt, 0, 100)), j, 0)
+              wsince = tnow
+              bank = c0 - rc
+              since = tnow
+              msg = "Karts repaired"
+              msgT = time
+              haptic()
+            }
+          }
+        } else if sel >= 0 {
+          let it = items[sel]
+          let isShop = KD[it.k].t == 1
+          if x >= PX + PW - 36 && y < PY + 32 {
+            sel = -1
+            arm = false
+          } else if y >= BY && y <= BY + BH {
+            if isShop && x < PX + PW / 2 {
+              arm = false
+              items = set(items, sel, merge(it, {o: !it.o}))
+            } else if arm {
+              bank = coins + floor(it.sp / 2)
+              since = tnow
+              items = remove(items, sel)
+              sel = -1
+              arm = false
+            } else {
+              arm = true
+            }
+          } else if isShop && y >= PRY - 18 && y <= PRY + 18 {
+            arm = false
+            let np = x >= SX1 && x < SX1 + 44 ? max(0, it.p - 0.5) : x >= SX2 - 4 && x < SX2 + 44 ? min(30, it.p + 0.5) : it.p
+            bank = coins
+            since = tnow
+            items = set(items, sel, merge(it, {p: np}))
+          }
+        } else if y >= PY && y < PY + TBH {
+          tab = clamp(floor((x - PX) / (PW / 5)), 0, 4)
+          tool = tab == 3 ? 12 : -1
+        } else if tab < 4 && y >= CY {
+          let hi = floor((y - CY) / (CHh + 6)) * 3 + floor((x - PX) / (CW + 6))
+          if hi >= 0 && hi < len(TABK[tab]) && x >= PX {
+            tool = tool == TABK[tab][hi] ? -1 : TABK[tab][hi]
+            if tool == 20 && bi >= 0 && bn > 0 { bh = bl[1] }
+          }
+        } else if tab == 4 {
+          let d = x >= SX1 && x < SX1 + 44 ? -1 : x >= SX2 - 4 && x < SX2 + 44 ? 1 : 0
+          if d != 0 && y >= FRY - 18 && y <= FRY + 18 {
+            bank = coins
+            since = tnow
+            fee = clamp(fee + d, 0, 50)
+          } else if d != 0 && y >= MRY - 18 && y <= MRY + 18 {
+            if d > 0 && mech >= mechMax {
+              msg = mechMax == 0 ? "Mechanics need a workshop" : "Each workshop takes 3 mechanics"
+              msgT = time
+            } else if d > 0 && coins < 300 {
+              msg = "Hiring costs $300"
+              msgT = time
+            } else {
+              bank = coins - (d > 0 ? 300 : 0)
+              since = tnow
+              mech = clamp(mech + d, 0, 12)
+            }
+          } else if d != 0 && y >= SRY - 18 && y <= SRY + 18 {
+            if d > 0 && coins < 300 {
+              msg = "Hiring costs $300"
+              msgT = time
+            } else {
+              bank = coins - (d > 0 ? 300 : 0)
+              since = tnow
+              staff = clamp(staff + d, 0, 9)
+            }
+          } else if y >= LRY - 18 && y <= LRY + 18 && x >= SX1 && land < 4 {
+            if coins < LANDC[land + 1] {
+              msg = "Not enough cash"
+              msgT = time
+            } else {
+              bank = coins - LANDC[land + 1]
+              since = tnow
+              land = land + 1
+              panX = 0
+              panY = 0
+              msg = "More land! Now ${LS0 + 2}×${LS0 + 2}"
+              msgT = time
+              haptic()
+            }
+          }
+        }
+      }
+
+      // a finger dragged over the map lays path, plants, lays track, or moves the map
+      onDrag: {
+        if x < MAPW && y < MAPH && y >= HUDH {
+          let lift = tool == 20 && bn >= 3 ? nextZ * LZ * HZ : 0
+          let ux = (x - OX) / TW
+          let uy = (y - OY) / TW + lift
+          let gx = floor(2 * uy + ux)
+          let gy = floor(2 * uy - ux)
+          let cell = gy * N + gx
+          let inMap = gx >= 0 && gx < N && gy >= 0 && gy < N
+          if tool == 12 {
+            if inMap && isO[cell] && !isP[cell] && own[cell] < 0 && !isW[cell] && all(lv[cell], z => z >= 2) && coins >= 10 {
+              bank = coins - 10
+              since = tnow
+              paths = paths + [cell]
+            }
+          } else if tool >= 6 && tool <= 11 {
+            if inMap && isO[cell] && own[cell] < 0 && !isP[cell] && !isW[cell] && len(lv[cell]) == 0 && coins >= KD[tool].cost {
+              bank = coins - KD[tool].cost
+              since = tnow
+              items = items + [{c: cell, k: tool, p: 0, o: true, sp: KD[tool].cost}]
+            }
+          } else if tool == 20 {
+            if inMap && bi >= 0 && cell != bl[0] {
+              let a = [cell].map(cAct)[0]
+              if a.a == 2 && coins >= pieceCost {
+                bank = coins - pieceCost
+                since = tnow
+                tracks = set(tracks, bi, merge(tracks[bi], {t: bt + [[cell, nextZ]], sp: tracks[bi].sp + pieceCost}))
+              }
+            }
+          } else {
+            panX = clamp(panX + dx, -MAPW * 0.8, MAPW * 0.8)
+            panY = clamp(panY + dy, -MAPH * 0.8, MAPH * 0.8)
+          }
+        }
+      }
+
+      clip(0, HUDH, MAPW, MAPH - HUDH) {
+        translate(OX, OY) {
+          scale(TW, TW, 0, 0) {
+            // ---- the karts: running round the lap, or parked on the grid; broken ones in the pits ----
+            for j in range(len(tracks)) {
+              if tracks[j].d {
+                let S = ts[j]
+                let n = S.n
+                let kn = kw[j]
+                let run = kartRun[j]
+                for q in range(min(kn, 8)) {
+                  let f = 1 + (hash(j, q, 5) - 0.5) * 0.08
+                  let ph = run ? ((time * 0.5 * f + q * S.lap / min(kn, 8) + j * 2.3) % S.lap + S.lap) % S.lap / S.lap * 64 : 0
+                  let i6 = min(63, floor(ph))
+                  let sp = run ? lerp(S.sx[i6], S.sx[i6 + 1], ph - i6) : 0
+                  let m = run ? min(n - 1, floor(sp)) : floor(q / 4)
+                  let fr = run ? clamp(sp - m, 0, 1) : 0.15 + (q % 4 < 2 ? 0 : 0.45)
+                  let f4 = fr * 4
+                  let i0 = min(3, floor(f4))
+                  let a0 = S.pp[m][i0]
+                  let a1 = S.pp[m][i0 + 1]
+                  let sd = q % 2 == 0 ? 0.45 : -0.45
+                  let px = lerp(a0[0] + a0[2] * sd, a1[0] + a1[2] * sd, f4 - i0)
+                  let py = lerp(a0[1] + a0[3] * sd, a1[1] + a1[3] * sd, f4 - i0) - 0.03
+                  rotate(deg(atan2(a1[1] - a0[1], a1[0] - a0[0])), px, py) {
+                    rect(px - 0.12, py - 0.03, 0.24, 0.07, fill: "#1d1d22", radius: 0.03)
+                    rect(px - 0.1, py - 0.06, 0.2, 0.08, fill: KCOL[(q + j * 3) % 8], radius: 0.03)
+                  }
+                  circle(px, py - 0.08, 0.04, fill: run ? KCOL[(q + j * 3 + 4) % 8] : "#f7edd3")
+                }
+                for q in range(min(8, tracks[j].k - kn)) {
+                  let a0 = S.pp[0][q % 5]
+                  let px = a0[0] + a0[2] * (1.7 + floor(q / 5) * 0.6)
+                  let py = a0[1] + a0[3] * (1.7 + floor(q / 5) * 0.6)
+                  rect(px - 0.1, py - 0.06, 0.2, 0.08, fill: "#7d8696", radius: 0.03)
+                  if q == 0 {
+                    circle(px + 0.05, py - 0.12 - time * 0.6 % 1 * 0.2, 0.04 + time * 0.6 % 1 * 0.04, fill: "#a3a8b399")
+                  }
+                }
+              }
+            }
+
+            // ---- the guests ----
+            // Each round of 26 s a guest walks from the gate to a track or shop picked by hash,
+            // stays 6 s (out of sight in the queue, by the counter at a shop) and walks back out.
+            for g, k in crowd {
+              let ph = time / 26 + g.o
+              let rn = floor(ph)
+              let tc = (ph - rn) * 26
+              let dd = dests[floor(hash(k, rn, 2) * len(dests))]
+              let pts = dd.r
+              let S = len(pts) - 1
+              let v = max(1.4, S / 8)
+              let tw = S / v
+              let f = tc < tw ? tc * v : tc < tw + 6 ? S : tc < 2 * tw + 6 ? S - (tc - tw - 6) * v : -1
+              if f >= 0 && (f < S || dd.shop) {
+                let i0 = min(floor(f), S - 1)
+                let ux = lerp(pts[i0][0], pts[i0 + 1][0], f - i0) + g.dx
+                let uy = lerp(pts[i0][1], pts[i0 + 1][1], f - i0) + g.dy
+                let step = f > 0 && f < S ? (floor(time * 6 + k) % 2) * 0.015 : 0
+                rect(ux - 0.035, uy - 0.15 - step, 0.07, 0.15 + step, fill: g.shirt)
+                circle(ux, uy - 0.19 - step, 0.04, fill: g.skin)
+                if g.cap {
+                  circle(ux, uy - 0.21 - step, 0.035, fill: g.cc)
+                }
+              }
+            }
+          }
+        }
+
+        // ---- a word for a new attraction, and messages ----
+        if len(tracks) == 0 && tool < 0 && time % 1.6 < 1.2 {
+          rect(CXm - 140, MAPH - 46, 280, 30, fill: "#14213acc", radius: 6 * corners)
+          text("Pick Kart track below and tap the map", CXm, MAPH - 31, size: 12, color: UI.gold, align: center, bold: true)
+        }
+        if time - msgT < 2.4 && time >= msgT {
+          rect(CXm - 160, HUDH + 10, 320, 32, fill: "#f7edd3", radius: 16 * corners)
+          text(msg, CXm, HUDH + 26, size: 13, color: UI.bg, align: center, bold: true)
+        }
+      }
+    }
+  }
+}
