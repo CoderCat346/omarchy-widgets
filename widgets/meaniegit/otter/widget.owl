@@ -1,0 +1,435 @@
+widget "otter" {
+  meta { owl: 3; description: "A pixel otter floating on its back in a pond, holding its favourite stone. Pet, tickle, scritch and feed it, splash the water; it naps at night and shelters from the rain (weather from wttr.in)"; version: "1.0"; license: "MIT"; category: "pets" }
+  size: 3x3
+  minSize: 2x2
+  padding: 0
+
+  // An otter in theme colors, drawn from `time` and a little state. Like the
+  // red panda, it needs no shell: the clock says when it's night, and taps and
+  // drags do the rest. It dozes at night (22 to 7) and after five minutes
+  // without company; a tap then only makes it peek, a second tap wakes it.
+  // Awake, a tap on it is a pet, another tap right after a tickle, a drag a
+  // scritch behind the ears, a tap on the fish a meal, a tap on the water a
+  // splash, and a tap in the sky makes it look there. When it rains where you
+  // are (wttr.in says), rain falls on the pond; a tap on the reeds makes it
+  // rain anyway, or never.
+  //
+  // Cheap when idle: the breath, blink, tail, ripples and z's step on the 1 s
+  // clock (`now`), so the tile redraws once a second. The frame clock (`time`)
+  // is only read for a few seconds after a tap or drag, and while it rains, so
+  // the launcher only animates every frame then.
+  source now = clock every 1s
+  // Real rain, where the phone is (located by IP). `status`: offline just means no rain.
+  source wx = http("https://wttr.in/?format=j1") every 30m timeout 10s json status
+
+  state born = 0 persist             // Unix seconds of the first tap
+  state fed = 0 persist              // Unix seconds
+  state pets = 0 persist
+  state lastTap = 0 persist          // last time someone played with it
+  state wakeUntil = 0 persist        // woken by a double tap until then
+  state rainMode = "auto" persist     // auto (with the weather), on or off; tap the reeds to cycle
+  // The last tap: in Canvas `time`, in Unix seconds, where, and what it did.
+  state tapAt = -100
+  state tapNow = 0
+  state tapX = 0
+  state tapY = 0
+  state tapKind = ""
+  // Scritching: a drag, with how far it has gone sideways.
+  state dragAt = -100
+  state dragNow = 0
+  state dragX = 0
+
+  let hour = num(fmtTime(now, "H"))
+  let night = hour != null && (hour >= 22 || hour < 7)   // not night while the clock is still loading
+  let idle = now - lastTap > 5 * 60
+  let asleep = (night || idle) && now >= wakeUntil
+  let hungry = fed > 0 && now - fed > 6 * 3600
+  let day = born > 0 ? floor((now - born) / 86400) + 1 : 1
+  let sky = wx != null && wx.ok ? lower(wx.out.current_condition[0].weatherDesc[0].value ?? "") : ""
+  let realRain = contains(sky, "rain") || contains(sky, "drizzle") || contains(sky, "shower") || contains(sky, "sleet")
+  let raining = rainMode == "on" || rainMode == "auto" && realRain
+
+  // Geometry from the tile's size, so the tap handler knows what was tapped.
+  // One art pixel, in dp: the otter, the pond and the reeds.
+  let W = tileWidth ?? 300
+  let H = tileHeight ?? 300
+  let p = clamp(floor(min(W / 34, H / 30)), 2, 8)
+  let s = p + 0.5
+  let textH = 16
+  // The pond's surface, and the otter bobbing on it. The art is 30 pixels wide.
+  let waterY = floor((H - textH) * 0.52 / p) * p
+  let bodyX = floor((W / 2 - 15 * p) / p) * p
+  let bodyY = waterY - 9 * p
+  // The lily pad with the fish, in the bottom-right corner.
+  let padX = floor((W - 8 * p) / p) * p
+  let padY = floor((H - textH - 6 * p) / p) * p
+
+  // Sprites: one letter per art pixel, "." is empty, colored by a palette.
+  // Floating on its back, head turned towards you: cream belly, a stone on it,
+  // and a wide flat tail trailing into the water. Eyes are drawn on, so they
+  // can move.
+  let otterArt = [
+    "..............................",
+    "...................bb...bb....",
+    ".................bbbbbbbbbb...",
+    "................bbbbbbbbbbbb..",
+    "..............bbbccccccccbbb..",
+    "...bbbbbbbbbbbbbbbccccccccbb..",
+    "...bbcccccssssccbbccccccccbb..",
+    "...bbcccccssssccbbccccccccbb..",
+    "...bbcccccssssccbbccwwwwccbb..",
+    "...bbcccccccccccbbccwkkwccbb..",
+    "...dddddddddddddbbbccccccbbb.."
+  ]
+  // The wide flat tail, dipping into the pond.
+  let tailArt = [
+    ".bbbbbbb.",
+    "dbbbbbbbd",
+    "ddbbbbdd.",
+    ".dddddd..",
+    "..dddd...",
+    "...dd...."
+  ]
+  let fishArt = [
+    "...oooo...",
+    "..ooooo.oo",
+    ".oowkooooo",
+    "..ooooo.oo",
+    "...oooo..."
+  ]
+  let heartArt = [".h.h.", "hhhhh", "hhhhh", ".hhh.", "..h.."]
+
+  // The fur keeps its own colors, whatever the theme: a grey otter is a seal.
+  let fur = #8a5a2e
+  let furDark = #4a2f18
+  let cream = #f3e7d3
+  let whisker = #fffaf0
+  let ink = #201009
+  let stone = #8e9aa6
+  let leaf = mix(green, background, 0.2)
+  let leafLight = mix(green, foreground, 0.25)
+  let leafDark = mix(green, background, 0.45)
+  let water = mix(blue, background, 0.55)
+  let waterDark = mix(blue, background, 0.72)
+  let waterLight = mix(blue, foreground, 0.3)
+  let pal = {
+    b: fur, d: furDark, c: cream, w: whisker, k: ink, s: stone,
+    o: orange, h: #e8506a
+  }
+  let bodyPal = {b: fur, d: furDark, c: cream, w: whisker, k: ink, s: stone}
+  let fishPal = {o: orange, w: cream, k: ink}
+
+  Canvas {
+    onTap: {
+      // What this tap does, decided before any state changes.
+      tapKind = x < 6 * p ? "rain"
+        : asleep ? (now - tapNow <= 3 && tapKind == "peek" ? "wake" : "peek")
+        : x >= bodyX + 3 * p && x < bodyX + 28 * p && y >= bodyY - p && y <= bodyY + 12 * p ? (now - tapNow <= 2 && (tapKind == "pet" || tapKind == "tickle") ? "tickle" : "pet")
+        : x >= padX - 6 * p && x <= padX + 6 * p && y >= padY - 5 * p ? "feed"
+        : y > waterY ? "splash" : "look"
+      pets = tapKind == "pet" || tapKind == "tickle" ? pets + 1 : pets
+      fed = tapKind == "feed" ? now : fed
+      wakeUntil = tapKind == "wake" ? now + 120 : wakeUntil
+      rainMode = tapKind != "rain" ? rainMode : rainMode == "auto" ? "on" : rainMode == "on" ? "off" : "auto"
+      lastTap = tapKind == "peek" || tapKind == "rain" ? lastTap : now
+      born = born > 0 ? born : now
+      tapAt = time
+      tapNow = now
+      tapX = x
+      tapY = y
+    }
+    onDrag: {
+      dragX = clamp((time - dragAt < 0.5 ? dragX : 0) + dx, -60, 60)
+      dragAt = time
+      dragNow = now
+      lastTap = asleep ? lastTap : now
+    }
+
+    // Seconds since the last tap. The wall clock is checked first, so `time` is
+    // only read while a tap is fresh; and since `time` restarts with the frame
+    // clock (say, after the page was off screen), an old tap could look recent
+    // again, so the wall clock has the final say.
+    let since = now - tapNow < 6 && time >= tapAt ? time - tapAt : 1000
+    let scritch = !asleep && now - dragNow < 3 && time >= dragAt && time - dragAt < 0.7 ? 1 - max(time - dragAt - 0.3, 0) / 0.4 : 0
+
+    // Night sky: a crescent moon and a few twinkling stars.
+    if night {
+      for c in range(25) {
+        let i = c % 5 - 2
+        let j = floor(c / 5) - 2
+        if i * i + j * j <= 5 && (i + 1) * (i + 1) + (j + 1) * (j + 1) > 4 {
+          rect(W - 8 * p + i * p, 3 * p + j * p, s, s, fill: yellow)
+        }
+      }
+      for k in range(5) {
+        let sx = floor(W * (0.22 + 0.15 * k) / p) * p
+        let sy = (2 + (k * 7) % 6) * p
+        rect(sx, sy, p, p, fill: alpha(foreground, 0.3 + 0.5 * abs(sin(now * 0.8 + k * 1.9))))
+      }
+    }
+
+    // The pond: darker towards the bottom, with a bright surface line.
+    rect(0, waterY, W, H - textH - waterY, fill: water)
+    rect(0, waterY + 7 * p, W, max(H - textH - waterY - 7 * p, 0), fill: alpha(waterDark, 0.4))
+    rect(0, waterY, W, p, fill: waterLight)
+    // Slow wave dashes drifting across the pond.
+    for k in range(5) {
+      let wy = waterY + (2 + k * 3) * p
+      let off = round(sin(now * 0.7 + k * 0.9) * 2) * p
+      for j in range(3) {
+        let wx = floor(W * ((j * 37 + k * 11) % 17) / 17 / p) * p + off
+        rect(wx, wy, (2 + (k + j) % 2) * p, p, fill: alpha(waterLight, 0.22))
+      }
+    }
+
+    // Reeds in the shallows on the left, swaying a little. Tapping them cycles
+    // the rain, as tapping the red panda's trunk does.
+    for k in range(3) {
+      let rx = (1 + k * 2) * p
+      let sway = round(sin(now * 0.6 + k * 1.3) * 1.5) * p
+      let top = waterY - (11 + k * 2) * p
+      rect(rx, top, p, waterY - top + 2 * p, fill: leafDark)
+      rect(rx + sway, top + 2 * p, 2 * p, p, radius: p, fill: leaf)
+      rect(rx - p + sway, top + 4 * p, 2 * p, p, radius: p, fill: leafLight)
+      rect(rx + sway, top - 2 * p, 2 * p, 3 * p, radius: p, fill: mix(orange, background, 0.35))
+      rect(rx + sway, top - 3 * p, p, p, fill: leafDark)
+    }
+
+    // Ripples spreading out from the otter.
+    for k in range(3) {
+      let t = (now * 0.35 + k / 3) % 1
+      let a = 0.35 * (1 - t)
+      let rw = (16 + t * 10) * p
+      let cx = bodyX + 15 * p
+      rect(cx - rw, waterY + p, 2 * p, s, fill: alpha(waterLight, a))
+      rect(cx + rw, waterY + p, 2 * p, s, fill: alpha(waterLight, a))
+      rect(cx - rw * 0.8, waterY + 3 * p, 3 * p, s, fill: alpha(waterLight, a * 0.7))
+      rect(cx + rw * 0.8, waterY + 3 * p, 3 * p, s, fill: alpha(waterLight, a * 0.7))
+    }
+
+    if asleep {
+      // A gentle rise and fall, the tail swinging lazily.
+      let breath = (floor(now / 2) % 2) * p
+      let swing = (floor(now / 3) % 2) * p
+      let bx = bodyX
+      let by = bodyY + breath
+      let peek = tapKind == "peek" && since < 2.5
+      sprite(tailArt, bx + swing, by + 6 * p, p, palette: pal)
+      sprite(otterArt, bx, by, p, palette: bodyPal)
+      // Closed eyes, with a peeking one when tapped.
+      if peek {
+        let open = since < 1.8 ? 2 : 1
+        rect(bx + 19 * p, by + 6 * p, 2 * p, open * p, fill: ink)
+        rect(bx + 23 * p, by + 6 * p, 2 * p, open * p, fill: ink)
+      } else {
+        rect(bx + 19 * p, by + 7 * p, 2 * p, s, fill: ink)
+        rect(bx + 23 * p, by + 7 * p, 2 * p, s, fill: ink)
+      }
+      if !peek {
+        for k in range(3) {
+          let t = ((now + k * 2) % 6) / 6
+          text("z", bx + 24 * p + t * 3 * p, by - p - t * 8 * p, size: (2 + t * 2) * p, bold: true, color: alpha(foreground, 1 - t))
+        }
+      }
+    } else {
+      let petting = since < 2.5 && tapKind == "pet"
+      let tickling = since < 2.2 && tapKind == "tickle"
+      let eating = since < 2.6 && tapKind == "feed"
+      let splashed = since < 1.6 && tapKind == "splash"
+      let looking = since < 2.5 && tapKind == "look"
+      let waking = since < 2.2 && tapKind == "wake"
+      let chomping = eating && since > 0.7
+      let happy = petting || scritch > 0 || chomping
+      // It bobs on the water; petted, it rocks a little more.
+      let bob = round(sin(now * 0.9)) * p
+      let rock = petting ? round(abs(sin(since * 7)) * 2 * max(1.4 - since, 0)) * p : 0
+      // Tickled, it wriggles side to side; scritched, it leans into the hand.
+      let shimmy = tickling ? [0, 1, 0, -1][floor(since * 12) % 4] * p : scritch > 0 ? sign(dragX) * p : 0
+      let bx = bodyX + shimmy
+      let by = bodyY + bob - rock
+
+      // The tail flicks, faster when it's pleased, and dips into the pond.
+      let flick = (petting || scritch > 0 ? [0, 1, 1, 0, -1, -1][floor(since * 10) % 6] : [0, 1, 1, 0, -1, -1][now % 6]) * p
+      sprite(tailArt, bx + flick, by + 6 * p, p, palette: pal)
+      sprite(otterArt, bx, by, p, palette: bodyPal)
+
+      // The stone on its belly, with a little shine.
+      rect(bx + 11 * p, by + 5 * p, 2 * p, p, fill: mix(stone, whisker, 0.5))
+      rect(bx + 10 * p, by + 8 * p, 4 * p, p, fill: mix(stone, background, 0.35))
+
+      // Front paws resting on the stone, and the hind feet up by the tail.
+      rect(bx + 8 * p, by + 4 * p, 2 * p, 3 * p, radius: p, fill: fur)
+      rect(bx + 14 * p, by + 4 * p, 2 * p, 3 * p, radius: p, fill: fur)
+      rect(bx + 8 * p, by + 4 * p, 2 * p, p, fill: mix(fur, cream, 0.5))
+      rect(bx + 14 * p, by + 4 * p, 2 * p, p, fill: mix(fur, cream, 0.5))
+      rect(bx + 1 * p, by + 4 * p, 3 * p, 2 * p, radius: p, fill: furDark)
+      rect(bx + 4 * p, by + 4 * p, 3 * p, 2 * p, radius: p, fill: furDark)
+
+      // Eyes, on the cream face: columns 19-20 and 23-24, rows 6-7.
+      let ey = by + 6 * p
+      let blink = now % 7 == 3
+      if waking {
+        // A yawn: eyes squeezed shut, mouth wide open.
+        for e in [19, 23] { rect(bx + e * p, ey + p, 2 * p, s, fill: ink) }
+        rect(bx + 21 * p, ey + 3 * p, 2 * p, 2 * p, radius: p, fill: ink)
+      } else if tickling {
+        // Squeezed shut (x x) and giggling.
+        for e in [19, 23] {
+          rect(bx + e * p, ey, s, s, fill: ink)
+          rect(bx + (e + 1) * p, ey + p, s, s, fill: ink)
+          rect(bx + e * p, ey + 2 * p, s, s, fill: ink)
+          rect(bx + (e + 1) * p, ey - p, s, s, fill: ink)
+        }
+        if floor(since * 8) % 2 == 0 { rect(bx + 21 * p, ey + 3 * p, 2 * p, s, fill: ink) }
+      } else if happy {
+        // Content: eyes closed in two little arcs, cheeks blushing.
+        for e in [19, 23] {
+          rect(bx + e * p, ey + p, s, s, fill: ink)
+          rect(bx + (e + 1) * p, ey, s, s, fill: ink)
+          rect(bx + (e + 2) * p, ey + p, s, s, fill: ink)
+        }
+        rect(bx + 17 * p, ey + 2 * p, 2 * p, p, fill: alpha(#ff7a88, 0.5))
+        rect(bx + 24 * p, ey + 2 * p, 2 * p, p, fill: alpha(#ff7a88, 0.5))
+      } else if splashed {
+        // Wide eyes at the splash.
+        for e in [19, 23] {
+          rect(bx + e * p, ey - p, 2 * p, 3 * p, fill: ink)
+          rect(bx + e * p, ey, s, s, fill: cream)
+        }
+        text("!", bx + 23 * p, by - 3 * p, size: 4 * p, bold: true, color: #ffd45a, align: center)
+      } else if blink {
+        for e in [19, 23] { rect(bx + e * p, ey + p, 2 * p, s, fill: ink) }
+      } else {
+        // Looking around, at the last tap, or up at a fishy thought.
+        let lx = looking ? sign(tapX - (bx + 21 * p)) : hungry ? 1 : [0, 1, 0, -1][floor(now / 3) % 4]
+        let ly = looking ? (tapY < ey ? -1 : tapY > ey + 4 * p ? 1 : 0) : hungry ? -1 : 0
+        for e in [19, 23] {
+          rect(bx + (e + (lx + 1) / 2) * p, ey + (1 + (ly + 1) / 2) * p, 2 * p, 2 * p, fill: ink)
+          rect(bx + (e + (lx + 1) / 2 + 1) * p, ey + (1 + (ly + 1) / 2) * p, s, s, fill: alpha(cream, 0.7))
+        }
+      }
+
+      // Munching a fish: the mouth opens and shuts, bits fall.
+      if chomping {
+        if floor(since * 6) % 2 == 0 { rect(bx + 21 * p, ey + 3 * p, 2 * p, s, fill: ink) }
+        for k in range(3) {
+          let f = since - 0.7
+          rect(bx + (20 + k * 2) * p + (k - 1) * f * 5 * p, ey + 4 * p + f * f * 16 * p, p, p, fill: mix(orange, background, 0.3))
+        }
+      }
+
+      // A fish flies over from the lily pad and lands in its paws.
+      if eating && since <= 0.7 {
+        let t = since / 0.7
+        let fx = lerp(padX - 5 * p, bx + 19 * p, t)
+        let fy = lerp(padY - 2 * p, by + 9 * p, t) - sin(rad(t * 180)) * 6 * p
+        sprite(fishArt, floor(fx / p) * p, floor(fy / p) * p, p, palette: fishPal)
+      }
+
+      // Hearts float up when petted.
+      if petting {
+        for k in range(3) {
+          let t = since - k * 0.35
+          if t > 0 && t < 1.8 {
+            layer(1 - t / 1.8) {
+              sprite(heartArt, floor((bx + [8, 14, 20][k] * p + sin(t * 5 + k) * p) / p) * p, floor((by - t * 6 * p) / p) * p, p, palette: pal)
+            }
+          }
+        }
+      }
+      // Giggles when tickled.
+      if tickling {
+        for k in range(2) {
+          let t = (since * 0.7 + k / 2) % 1
+          text("hihi", bx + (k == 0 ? 14 : 23) * p, by + 2 * p - t * 6 * p, size: 2 * p, bold: true, color: alpha(foreground, 1 - t))
+        }
+      }
+      // Sparkles while it's scritched.
+      if scritch > 0 {
+        for k in range(4) {
+          let t = (time * 1.5 + k / 4) % 1
+          let ang = k * 90 + time * 60
+          rect(floor((bx + 21 * p + cos(rad(ang)) * 9 * p) / p) * p, floor((by + 4 * p + sin(rad(ang)) * 7 * p) / p) * p, p, p, fill: alpha(#ffd45a, (1 - t) * scritch))
+        }
+      }
+      // Wondering what that was.
+      if looking {
+        text("?", bx + 21 * p, by - 3 * p, size: 3 * p, bold: true, color: alpha(foreground, 1 - since / 2.5), align: center)
+      }
+      // Hungry: a thought bubble with a fish.
+      if hungry && !eating {
+        let cloud = mix(background, foreground, 0.22)
+        let tx = bx + 20 * p
+        let ty = max(by - 8 * p, p)
+        rect(tx - p, ty + 6 * p, p, p, fill: cloud)
+        rect(tx, ty + 5 * p, p, p, fill: cloud)
+        rect(tx + p, ty - p, 6 * p, 8 * p, radius: p, fill: cloud)
+        rect(tx + 2 * p, ty + 2 * p, 3 * p, 2 * p, radius: p, fill: orange)
+        rect(tx + 5 * p, ty + p, p, p, fill: orange)
+        rect(tx + 5 * p, ty + 4 * p, p, p, fill: orange)
+        rect(tx + 2 * p, ty + 2 * p, p, p, fill: ink)
+      }
+    }
+
+    // A splash where the water was tapped.
+    if tapKind == "splash" && since < 2.5 {
+      for k in range(2) {
+        let t = since - k * 0.25
+        if t > 0 && t < 2 {
+          circle(tapX, tapY, 2 * p + t * 8 * p, stroke: alpha(waterLight, 0.6 * (1 - t / 2)), width: s)
+        }
+      }
+      for k in range(4) {
+        let f = since
+        if f < 0.6 {
+          rect(tapX + (k - 1.5) * p, tapY - (1 + f * 6) * p, p, p, fill: alpha(waterLight, 1 - f / 0.6))
+        }
+      }
+    }
+
+    // Rain: streaks over the pond and rings where they land.
+    if raining {
+      let wet = alpha(mix(blue, foreground, 0.3), 0.55)
+      for k in range(22) {
+        let t = (time * (1.1 + (k % 3) * 0.25) + k * 0.37) % 1
+        let rx = floor(W * ((k * 53) % 29) / 29 / p) * p
+        rect(rx, floor(t * waterY / p) * p, s, 3 * p, fill: wet)
+      }
+      for k in range(8) {
+        let rx = floor(W * ((k * 31) % 17) / 17 / p) * p
+        let ry = waterY + (2 + (k * 5) % 10) * p
+        let ph = (time * 2 + k * 0.6) % 1
+        if ph < 0.5 {
+          circle(rx, ry, (1 + ph * 4) * p, stroke: alpha(waterLight, 0.45 * (1 - ph / 0.5)), width: s)
+        }
+      }
+    }
+
+    // The lily pad and the fish in the bottom-right corner.
+    arc(padX, padY, 5 * p, 30, 300, fill: leafDark)
+    arc(padX, padY, 4 * p, 30, 300, fill: leaf)
+    rect(padX - 2 * p, padY - 2 * p, 2 * p, p, fill: leafLight)
+    if !(since < 2.6 && tapKind == "feed") {
+      sprite(fishArt, padX - 5 * p, padY - 2 * p + (now % 2) * p, p, palette: fishPal)
+    }
+
+    // The surface, drawn in front of the submerged parts.
+    rect(0, waterY + p, W, s, fill: alpha(waterLight, 0.45))
+    rect(0, waterY + 3 * p, W, s, fill: alpha(waterLight, 0.25))
+
+    // What it's up to, along the bottom.
+    rect(0, H - textH, W, textH, fill: alpha(background, 0.5))
+    let status = since < 2.5 && tapKind == "rain" ? "rain ${rainMode == "auto" ? "with the weather" : rainMode}"
+      : asleep ? (night ? "zzz · asleep in the pond" : "napping · tap twice to wake")
+      : since < 2.5 && tapKind == "pet" ? "happy · ♥︎${pets}"
+      : since < 2.5 && tapKind == "tickle" ? "hihihi"
+      : since < 2.5 && tapKind == "feed" ? "nom nom fish"
+      : since < 2.5 && tapKind == "splash" ? "splash!"
+      : since < 2.5 && tapKind == "wake" ? "yawn… good morning"
+      : scritch > 0 ? "scritches · bliss"
+      : hungry ? "hungry · tap the fish"
+      : raining ? "day ${day} · ♥︎${pets} · rain"
+      : "day ${day} · ♥︎${pets}"
+    text(status, W / 2, H - textH / 2, size: 11, align: center, color: muted)
+  }
+}
