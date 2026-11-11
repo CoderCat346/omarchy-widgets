@@ -1,3 +1,5 @@
-# The order of the store: ids listed here would go first, in this order, and ids after a "..." line
-# last; nothing is listed, so every widget, face and app is shuffled anew on every push.
+# The order of the store: ids listed here go first, in this order, and ids after a "..." line
+# last; everything else follows rank.txt and rank-apps.txt (tools/rank.py).
 # CI applies it when it builds index.json, and apps.json for apps.
+simonschubert/sky-raid
+...
