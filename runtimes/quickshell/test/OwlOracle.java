@@ -253,6 +253,20 @@ public class OwlOracle {
       out.append("]");
     }
     out.append("}");
-    System.out.println(out);
+    System.out.println(assetsAsDataUrls(out.toString()));
+  }
+
+  /**
+   * Since launcher 1.3.0 the compiler builds an asset's name into what reads it, as the text "asset:name",
+   * so it no longer comes through read() above. Owl.js turns an asset into a data URL: print the same.
+   */
+  static String assetsAsDataUrls(String json) {
+    for (Global g : program.getGlobals()) {
+      if (!(g instanceof Global.Asset)) continue;
+      String b64 = Base64.getEncoder().encodeToString(((Global.Asset) g).getBytes());
+      String url = "data:" + assetMime(b64) + ";base64," + b64;
+      json = json.replaceAll("asset:" + java.util.regex.Pattern.quote(g.getName()) + "(?![A-Za-z0-9_])", java.util.regex.Matcher.quoteReplacement(url));
+    }
+    return json;
   }
 }
