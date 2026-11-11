@@ -1,0 +1,1028 @@
+face "Omagara" {
+  meta { owl: 21; description: "A transparent home face with grouped interactive notifications, curved alphabetical navigation and on-demand search"; version: "1.1"; license: "MIT"; category: "home" }
+  fps: 60
+  page: 0
+  edge: true
+  padding: 0
+  background: transparent
+  requires { pacman: [] }
+
+  source now = clock every 1m
+  source seconds = clock every 1s
+  source drawer = android.drawer
+  source installed = android.apps
+  source notices = android.notifications
+  source agenda = android.calendar
+  source nextAlarm = android.alarm
+  // Transient navigation only: no favorites, saved app lists or polling.
+  state screenMode = "search"
+  state browsing = false
+  state queryText = ""
+  state letter = "A"
+  state appTracking = false
+  state activeSide = 0
+  state draggingSide = 0
+  state fingerPosition = 0
+  // Horizontal mountain travel (dp), driven by the thumb’s absolute drag position.
+  state railPull = 0
+  state railThumbX = 0
+  state hapticSteps = 0
+  state appScroll = 0
+  state appVelocity = 0
+  state appGlideStarted = 0
+  state appAnchor = ""
+  state appAnchorOffset = 0
+  state appAnchorSection = ""
+  // Screen-space dp, updated only by stationary rail touch handlers.
+  state touchY = 0
+  state expandedStack = ""
+  state replyKey = ""
+  state replyDraft = ""
+  state noticeDragKey = ""
+  state noticeDragX = 0
+
+  state prefs = {} persist
+  state worldZones = [] persist
+  state heldAlphabet = []
+  state railHeld = false
+  state menu = ""
+  state menuShortcuts = null
+  state pickedEvent = null
+  state calendarDay = ""
+  state upcoming = true
+  state resetConfirm = false
+  state importText = ""
+  state importStatus = ""
+  state clockTab = "alarms"
+  state timerMinutes = "5"
+  state timerDeadline = 0 persist
+  state timerLeft = 0 persist
+  state watchStarted = 0
+  state watchElapsed = 0
+  let defaults = {idleAlphabet: true, hideEmpty: true, icons: true, tintIcons: false, clock: true, date: true, event: true, notifications: true, previews: true, curve: true, reduceMotion: false, leftInput: true, grouping: true, actions: true, clockTap: true, dateTap: true, eventTap: true, searchContacts: false, calculator: true, appScale: 80, hapticFeedback: "Every letter"}
+  let appScaleChoices = [75, 80, 85, 90, 95, 100, 105, 110, 115]
+  let hapticChoices = ["Off", "Reduced", "Every letter"]
+  let cfg = merge(defaults, prefs, {searchContacts: false, appScale: contains(appScaleChoices, prefs.appScale) ? prefs.appScale : 80, hapticFeedback: contains(hapticChoices, prefs.hapticFeedback) ? prefs.hapticFeedback : "Every letter"})
+  let zoneChoices = ["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Toronto", "America/Sao_Paulo", "Europe/London", "Europe/Paris", "Europe/Berlin", "Asia/Dubai", "Asia/Kolkata", "Asia/Singapore", "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland"]
+  let preferenceRows = [
+    {section: "Appearance", key: "icons", name: "Show application icons"},
+    {key: "tintIcons", name: "Themed icons (monochrome)"},
+    {key: "clock", name: "Show clock"}, {key: "date", name: "Show date"},
+    {key: "event", name: "Show today's calendar event"},
+    {key: "reduceMotion", name: "Reduce motion"},
+    {section: "Navigation", key: "idleAlphabet", name: "Show alphabet while idle"},
+    {key: "hideEmpty", name: "Hide empty alphabet letters"},
+    {key: "leftInput", name: "Enable left-edge input"},
+    {key: "curve", name: "Curved alphabet animation"},
+    {section: "Notifications", key: "notifications", name: "Show notifications"},
+    {key: "previews", name: "Show notification content previews"},
+    {key: "grouping", name: "Group notifications by application"},
+    {key: "actions", name: "Show notification action buttons"},
+    {section: "Search", key: "calculator", name: "Integrated calculator"},
+    {key: "searchContacts", name: "Search contacts (unavailable)"},
+    {section: "Header interactions", key: "clockTap", name: "Clock tap action"},
+    {key: "dateTap", name: "Date / calendar tap action"},
+    {key: "eventTap", name: "Calendar event tap action"}
+  ]
+  let remaining = timerDeadline > 0 ? max(0, ceil(timerDeadline - seconds)) : timerLeft
+  let elapsed = watchElapsed + (watchStarted > 0 ? max(0, seconds - watchStarted) : 0)
+  // Deadline trigger, not a polling handler. Android sleep may delay delivery.
+  at timerDeadline { timerDeadline = 0; timerLeft = 0; notify("Omagara timer", "Time is up") }
+
+  let fullAlphabet = split("A B C D E F G H I J K L M N O P Q R S T U V W X Y Z #", " ")
+  let apps = (installed ?? []).sortBy(a => lower(trim(a.name)))
+  let groups = groupBy(apps, a => contains(fullAlphabet, upper(sub(trim(a.name), 0, 1))) ? upper(sub(trim(a.name), 0, 1)) : "#")
+  // Freeze mapping and geometry for the entire touch, even if apps update.
+  let liveAlphabet = cfg.hideEmpty ? fullAlphabet.filter(c => len(get(groups, c, [])) > 0) : fullAlphabet
+  let alphabet = railHeld ? heldAlphabet : liveAlphabet
+  let searchResults = trim(queryText) == "" ? apps : rank(apps, trim(queryText))
+  let availableHeight = (tileHeight ?? 800) - screenTop - screenInset
+  let compact = availableHeight < 560
+  let availableWidth = (tileWidth ?? 400) - screenLeft - screenRight
+  // The 44dp right rail is inset by screenRight + 4dp; glyphs are centered
+  // 22dp inside it. Keep the glyph fully inside the opposite safe edge.
+  let railBaseX = (tileWidth ?? 400) - screenRight - 26
+  let railMaxReach = max(0, railBaseX - screenLeft - 14)
+  // First/last letter centers sit at 31%/90% of the inset-safe height.
+  // Include half a cell above/below them so both endpoint hit regions are full-sized.
+  let railStep = availableHeight * 0.59 / max(1, len(alphabet) - 1)
+  let railHeight = railStep * max(1, len(alphabet))
+  let railTop = screenTop + availableHeight * 0.31 - (len(alphabet) > 1 ? railStep / 2 : 0)
+  // Handlers receive y local to this same rail: each center is (i + 0.5)
+  // * railStep. floor(y / railStep) selects i; no screen offset is subtracted.
+
+  // The source preserves post/update order; package + profile identifies a stack.
+  // Never replace the native key: open, action, dismiss and reply all need it.
+  let noticeItems = notices.items ?? []
+  let noticeGroups = groupBy(noticeItems, n => toJson([n.package, n.profile]))
+  let noticeGroupKeys = unique(noticeItems.map(n => toJson([n.package, n.profile])))
+  // Flatten before the lazy list, so even a large expanded stack virtualizes
+  // each notification separately (and doesn't load every icon at once).
+  let groupedNoticeRows = flatten(noticeGroupKeys.map(k => [{id: "group:" + k, stack: k, summary: true, item: first(get(noticeGroups, k, []))}] + (expandedStack == k && len(get(noticeGroups, k, [])) > 1 ? get(noticeGroups, k, []).map(n => {id: n.key, stack: k, summary: false, item: n}) : [])))
+  let noticeRows = cfg.grouping ? groupedNoticeRows : noticeItems.map(n => {id: n.key, stack: toJson([n.package, n.profile]), summary: false, item: n})
+  let clearableNotices = count(noticeItems, n => n.clearable)
+  let dayStart = parseTime(fmtTime(now, "yyyy-MM-dd"), "yyyy-MM-dd")
+  let dayEnd = parseTime(fmtTime(now, "yyyy-MM-dd") + " 23:59:59", "yyyy-MM-dd HH:mm:ss") + 1
+  // Only one event is displayed: duplicate calendar copies cannot repeat the line.
+  // Prefer timed current/upcoming events, then an all-day event covering today.
+  let todayEvents = (agenda.events ?? []).filter(e => trim(e.title ?? "") != "" && e.start < dayEnd && e.end > now && e.end > dayStart).sortBy(e => e.allDay ? dayEnd : max(now, e.start))
+  let todayEvent = first(todayEvents)
+  let headerBottom = screenTop + (cfg.clock ? (compact ? 64 : 100) : 0) + (cfg.date ? 36 : 0) + (cfg.event && todayEvent != null ? 32 : 0) + 36
+  let noticeTop = max(headerBottom, screenTop + availableHeight * 0.24)
+  let controlRight = screenRight + 60
+  // Center at 89% of inset-safe height, with at least 24dp below the button.
+  let searchBottom = screenInset + max(24, availableHeight * 0.11 - 24)
+  let noticeBottom = (tileHeight ?? 800) - searchBottom - 64
+  // One source of truth: 20dp outer left; 12dp clear of the 44dp right rail.
+  let noticeWidth = max(0, availableWidth - 80)
+
+  // One stable viewport, one continuous A–Z/# document. Only intersecting
+  // rows are instantiated: OWL 21 lazy Columns expose no scroll controller.
+  let appScale = cfg.appScale / 100
+  let appRowHeight = max(48, 64 * appScale)
+  let appLabelHeight = 32 * appScale
+  let appSafeTop = screenTop
+  let appSafeBottom = max(appSafeTop, (tileHeight ?? 800) - screenInset)
+  let appPanelHeight = max(0, appSafeBottom - appSafeTop)
+  let appFade = min(60, appPanelHeight / 5)
+  let appEdgeSpace = appFade + 8
+  let appPanelWidth = max(80, availableWidth - 168)
+  let appSections = fullAlphabet.filter(c => !cfg.hideEmpty || len(get(groups, c, [])) > 0)
+  let appSectionEnds = scan(appSections, (height, c) => height + appLabelHeight + len(get(groups, c, [])) * appRowHeight, 0)
+  let appSectionStarts = map(appSections, (c, i) => appEdgeSpace + (i == 0 ? 0 : appSectionEnds[i - 1]))
+  let appDocumentHeight = (last(appSectionEnds) ?? 0) + appEdgeSpace * 2
+  let appMaxScroll = max(0, appDocumentHeight - appPanelHeight)
+  // Read time ONLY while gliding. An every-frame trigger would keep OWL's
+  // frame clock awake even at rest. This analytic integral is exact at any fps.
+  let appGliding = browsing && !railHeld && menu == "" && appVelocity != 0
+  let appGlideAge = appGliding ? max(0, time - appGlideStarted) : 0
+  let appDecay = pow(2.718281828459045, -5 * min(appGlideAge, 1.6))
+  let appOffset = clamp(appScroll + (appGliding ? appVelocity * (1 - appDecay) / 5 : 0), 0, appMaxScroll)
+  let appGlideDone = appGliding && (appGlideAge >= 1.6 || abs(appVelocity) * appDecay <= 30 || appVelocity < 0 && appOffset <= 0 || appVelocity > 0 && appOffset >= appMaxScroll)
+  on appGlideDone {
+    if value {
+      appScroll = appOffset
+      appVelocity = 0
+      if appFirst != null { appAnchor = appFirst.id; appAnchorSection = appFirst.section; appAnchorOffset = appOffset - appFirst.top }
+    }
+  }
+  on browsing { if !value { appVelocity = 0; appTracking = false } }
+  // Keep section metadata separate from the window: headings must not use
+  // up the engine's 1,000-item app-list allowance.
+  let appDocument = map(appSections, (c, i) => {section: c, top: appSectionStarts[i], height: appLabelHeight + len(get(groups, c, [])) * appRowHeight})
+  let appKeyGroups = reduce(appSections, (m, c) => set(m, c, get(groups, c, []).map(a => a.key)), {})
+  // Render a continuous slice of the WHOLE document, with two guard rows
+  // beyond each edge. Never derive this span from letter or railHeld.
+  let appRenderTop = max(0, appOffset - 2 * appRowHeight)
+  let appRenderBottom = min(appDocumentHeight, appOffset + appPanelHeight + 2 * appRowHeight)
+  let visibleSections = appDocument.filter(s => s.top + s.height > appRenderTop && s.top < appRenderBottom).map(s => merge(s, {firstRow: max(0, floor((appRenderTop - s.top - appLabelHeight) / appRowHeight))}))
+  let appWindow = flatten(visibleSections.map(s => (
+    s.top + appLabelHeight > appRenderTop ? [{id: "heading:" + s.section, section: s.section, heading: true, top: s.top, height: appLabelHeight}] : []
+  ) + map(take(drop(get(groups, s.section, []), s.firstRow), ceil((appRenderBottom - appRenderTop) / appRowHeight) + 1), (a, j) => {id: a.key, section: s.section, heading: false, app: a, top: s.top + appLabelHeight + (s.firstRow + j) * appRowHeight, height: appRowHeight}).filter(r => r.top + r.height > appRenderTop && r.top < appRenderBottom)))
+  let appVisibleRows = appWindow.filter(r => r.top + r.height > appOffset && r.top < appOffset + appPanelHeight)
+  let appFirst = first(appVisibleRows)
+  // A single focus line serves section alignment and manual-scroll tracking.
+  // Explicit rail selection remains authoritative until a real list drag.
+  let appFocusY = appPanelHeight * 0.33
+  let focusLetter = (last(appDocument.filter(s => s.top <= appOffset + appFocusY)) ?? first(appDocument)).section ?? "A"
+  let selectedSection = max(0, indexOf(appSections, letter))
+  let selectedTop = get(appSectionStarts, selectedSection, 0)
+  let railScroll = clamp(selectedTop - appFocusY, 0, appMaxScroll)
+  let highlightedLetter = appTracking ? focusLetter : letter
+  // Settings handlers capture the active section before changing dimensions.
+  // Re-anchor once, never retain a pixel offset from the previous scale.
+  on appScale {
+    appVelocity = 0
+    menu = ""
+    if browsing {
+      appTracking = false
+      appScroll = railScroll
+      appAnchor = ""
+    }
+  }
+  // Keep the same visible row through installation/removal/profile updates.
+  let anchorSection = find(appDocument, s => s.section == appAnchorSection)
+  let anchorIndex = indexOf(get(appKeyGroups, appAnchorSection, []), appAnchor)
+  let anchorTop = anchorSection == null ? null : appAnchor == "heading:" + appAnchorSection ? anchorSection.top : anchorIndex < 0 ? null : anchorSection.top + appLabelHeight + anchorIndex * appRowHeight
+  // No per-scroll on-triggers: OWL limits those to 10 runs/sec. Anchors
+  // are captured by direct input handlers and once when a glide stops.
+  on apps {
+    if browsing && !railHeld {
+      let moving = appVelocity != 0
+      appScroll = moving || anchorTop == null || appAnchor == "" ? appOffset : clamp(anchorTop + appAnchorOffset, 0, appMaxScroll)
+      appVelocity = 0
+      menu = ""
+    }
+  }
+
+  let selectedDate = calendarDay == "" ? fmtTime(now, "yyyy-MM-dd") : calendarDay
+  // Noon avoids crossing a DST boundary when stepping a local calendar day.
+  let selectedNoon = parseTime(selectedDate + " 12:00", "yyyy-MM-dd HH:mm")
+  let calendarEvents = (agenda.events ?? []).filter(e => upcoming || fmtTime(e.start, "yyyy-MM-dd") <= selectedDate && fmtTime(e.end - 1, "yyyy-MM-dd") >= selectedDate)
+  on railHeld {
+    if !value {
+      if browsing { if appFirst != null { appAnchor = appFirst.id; appAnchorSection = appFirst.section; appAnchorOffset = appOffset - appFirst.top } }
+      if !contains(liveAlphabet, letter) { letter = first(liveAlphabet) ?? "A" }
+    }
+  }
+  on liveAlphabet { if !railHeld && !contains(liveAlphabet, letter) { letter = first(liveAlphabet) ?? "A" } }
+
+  on notices {
+    if !contains(noticeGroupKeys, expandedStack) { expandedStack = "" }
+    if !any(noticeItems, n => n.key == replyKey && any(n.actions ?? [], a => a.reply)) {
+      replyKey = ""
+      replyDraft = ""
+    }
+    if !any(noticeItems, n => n.key == noticeDragKey) { noticeDragKey = ""; noticeDragX = 0 }
+  }
+
+  component NotificationRow(item, stack, summary) {
+    Column {
+      fill: width
+      gap: 8
+      padding: [16, 16]
+      radius: 14
+      background: alpha(background, 0.48)
+      onTap: {
+        if summary && len(get(noticeGroups, stack, [])) > 1 {
+          expandedStack = expandedStack == stack ? "" : stack
+          replyKey = ""
+          replyDraft = ""
+        } else {
+          let notificationKey = item.key
+          queryText = ""
+          appVelocity = 0; browsing = false
+          activeSide = 0
+          expandedStack = ""
+          replyKey = ""
+          replyDraft = ""
+          notification("open", notificationKey)
+        }
+      }
+      // Horizontal consumption leaves the enclosing lazy Column free to scroll.
+      // Clip at the notification viewport, clear of both Android screen edges.
+      drag: horizontal
+      offset: [noticeDragKey == item.key && (!summary || len(get(noticeGroups, stack, [])) == 1) ? noticeDragX : 0, 0]
+      animate offset: cfg.reduceMotion ? tween(0ms) : spring(0.8, 400)
+      onDrag: {
+        if item.clearable && (!summary || len(get(noticeGroups, stack, [])) == 1) {
+          if noticeDragKey != item.key { noticeDragX = 0 }
+          noticeDragKey = item.key
+          noticeDragX = clamp(noticeDragX + dx, -noticeWidth, noticeWidth)
+        }
+      }
+      onDragEnd: {
+        if noticeDragKey == item.key && item.clearable && (abs(noticeDragX) > noticeWidth / 3 || abs(noticeDragX) > 16 && abs(vx) > 1000 && sign(vx) == sign(noticeDragX)) {
+          notification("dismiss", item.key)
+        }
+        noticeDragKey = ""
+        noticeDragX = 0
+      }
+      Row {
+        fill: width
+        gap: 14
+        align: center
+        Image { src: item.icon; size: 32; label: (item.app ?? "Notification") + (item.profile == null ? "" : " · " + item.profile) }
+        Text { text: (item.app ?? item.package) + (item.profile == null ? "" : " · " + item.profile); weight: 1; font: sans; fontSize: 12; color: muted; maxLines: 1 }
+        if item.clearable && (!summary || len(get(noticeGroups, stack, [])) == 1) {
+          Text { text: "×"; width: 44; height: 44; padding: [0, 10]; align: center; fontSize: 18; color: muted; onTap: notification("dismiss", item.key) }
+        }
+      }
+      if !summary || expandedStack != stack || len(get(noticeGroups, stack, [])) == 1 {
+        Text { text: cfg.previews ? (item.title ?? "") : "Notification content hidden"; font: sans; fontSize: 16; bold: true; maxLines: 2 }
+        if cfg.previews && (item.text ?? "") != "" { Text { text: item.text; font: sans; fontSize: 14; color: muted; maxLines: 3 } }
+      }
+      if summary && len(get(noticeGroups, stack, [])) > 1 {
+        Text { text: expandedStack == stack ? "${len(get(noticeGroups, stack, []))} notifications · collapse ▴" : "${len(get(noticeGroups, stack, []))} notifications · expand ▾"; font: sans; fontSize: 13; color: accent; maxLines: 1; padding: [0, 10] }
+      }
+      if cfg.previews && cfg.actions && (!summary || len(get(noticeGroups, stack, [])) == 1) && len(item.actions ?? []) > 0 {
+        Flow {
+          fill: width
+          gap: 8
+          padding: [0, 6, 0, 0]
+          for action, actionIndex in item.actions ?? [] {
+            Text {
+              text: action.title
+              font: sans
+              fontSize: 13
+              color: accent
+              padding: [10, 14]
+              onTap: {
+                if action.reply {
+                  replyKey = replyKey == item.key ? "" : item.key
+                  replyDraft = ""
+                } else {
+                  queryText = ""
+                  appVelocity = 0; browsing = false
+                  activeSide = 0
+                  notification("action", item.key, actionIndex)
+                }
+              }
+            }
+          }
+        }
+        if replyKey == item.key && any(item.actions ?? [], a => a.reply) {
+          Row {
+            fill: width
+            gap: 6
+            Input {
+              weight: 1
+              text: replyDraft
+              placeholder: "Reply…"
+              fontSize: 14
+              onChange: replyDraft = value
+              onSubmit: {
+                if trim(value) != "" {
+                  notification("reply", item.key, value)
+                  replyDraft = ""
+                  replyKey = ""
+                }
+              }
+            }
+            Text {
+              text: "Send"
+              font: sans
+              fontSize: 14
+              color: accent
+              padding: [12, 14]
+              onTap: {
+                if trim(replyDraft) != "" {
+                  notification("reply", item.key, replyDraft)
+                  replyDraft = ""
+                  replyKey = ""
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component AlphabetRail(side) {
+    Column {
+      width: side == 1 ? 44 : 20
+      height: railHeight
+      gap: 0
+      // Track both axes: outward thumb motion must work even without moving vertically.
+      // Hit region stays fixed; the glyph transforms are visual only.
+      ripple: false
+      onPress: {
+        appTracking = false
+        appScroll = appOffset
+        appVelocity = 0
+        heldAlphabet = liveAlphabet
+        railHeld = true
+        draggingSide = 0
+        hapticSteps = 0
+        // Track absolute thumb position while the rail's hit cells stay fixed.
+        // Aim the peak 84dp left of the thumb until the screen edge limits it.
+        railPull = side == 1 ? clamp(106 - x, 0, railMaxReach) : min(84, railMaxReach)
+        railThumbX = side == 1 ? railBaseX - 22 + x : screenLeft + x
+        touchY = railTop + clamp(y, 0, railHeight)
+        fingerPosition = clamp(y / railStep - 0.5, 0, max(0, len(alphabet) - 1))
+        letter = get(alphabet, clamp(floor(y / railStep), 0, max(0, len(alphabet) - 1)), letter)
+        if cfg.hapticFeedback != "Off" { haptic() }
+        appScroll = railScroll
+        menu = ""
+        activeSide = 1
+        browsing = true
+        expandedStack = ""
+        replyKey = ""
+        replyDraft = ""
+      }
+      onDrag: {
+        appTracking = false
+        appVelocity = 0
+        railHeld = true
+        draggingSide = 1
+        // Track absolute thumb position while the rail's hit cells stay fixed.
+        // Aim the peak 84dp left of the thumb until the screen edge limits it.
+        railPull = side == 1 ? clamp(106 - x, 0, railMaxReach) : min(84, railMaxReach)
+        railThumbX = side == 1 ? railBaseX - 22 + x : screenLeft + x
+        touchY = railTop + clamp(y, 0, railHeight)
+        fingerPosition = clamp(y / railStep - 0.5, 0, max(0, len(alphabet) - 1))
+        let nextLetter = get(alphabet, clamp(floor(y / railStep), 0, max(0, len(alphabet) - 1)), letter)
+        if nextLetter != letter {
+          hapticSteps = hapticSteps + 1
+          if cfg.hapticFeedback == "Every letter" || (cfg.hapticFeedback == "Reduced" && hapticSteps % 2 == 0) { haptic() }
+          letter = nextLetter
+        }
+        appScroll = railScroll
+        menu = ""
+        activeSide = 1
+        browsing = true
+        expandedStack = ""
+        replyKey = ""
+        replyDraft = ""
+      }
+      onTap: { browsing = true; activeSide = 0; railHeld = false; railPull = 0 }
+      // A press is cancelled when the drag detector consumes its first move.
+      // Keep the curve active in either detector order at that transition;
+      // a real drag release/cancellation always clears both states below.
+      onRelease: { if draggingSide == 0 { activeSide = 0; railHeld = false; railPull = 0 } }
+      onDragEnd: { draggingSide = 0; activeSide = 0; railHeld = false; railPull = 0 }
+      // Left input has no glyph nodes; either edge drives the right feedback.
+      if side == 1 && (cfg.idleAlphabet || activeSide != 0) {
+        for character, i in alphabet {
+          // One continuous elastic arc. A broad half-cosine spreads the
+          // outward travel across many adjacent letters instead of making a
+          // sharp kink at the selected letter. The curve follows the finger
+          // continuously; unchanged cells keep the same touch targets.
+          let distance = abs(i - fingerPosition)
+          let expanded = activeSide != 0 && cfg.curve && !cfg.reduceMotion
+          let radius = max(10, min(14, len(alphabet) * 0.58))
+          let curve = expanded ? (1 + cos(rad(min(distance / radius, 1) * 180))) / 2 : 0
+          Box {
+            height: railStep
+            fill: width
+            align: center
+            Text {
+              text: character
+              width: 18
+              font: sans
+              fontSize: 11
+              bold: highlightedLetter == character && browsing
+              color: highlightedLetter == character && browsing ? accent : curve > 0 ? foreground : len(get(groups, character, [])) > 0 ? muted : alpha(muted, 0.35)
+              align: center
+              background: transparent
+              radius: 4
+              offset: [-railPull * curve, 0]
+              scale: 1 + 0.16 * curve
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Bounded expression parser: each token updates a stack of sum/product
+  // frames. No dynamic evaluation, recursion, shell, service or idle trigger.
+  component Calculator(expression) {
+    Column {
+      let input = trim(sub(expression, 0, 129))
+      let candidate = cfg.calculator && match(input, "^[0-9.()+*/ \\t\\r\\n-]+$") != null && match(input, "[0-9]") != null && match(input, "[+*/()-]") != null
+      let tokens = candidate && len(expression) <= 128 ? matchAll(input, "[0-9]+(?:[.][0-9]*)?|[.][0-9]+|[()+*/-]") : []
+      let frame = {sum: 0, term: null, op: "+", unary: 1, need: true}
+      let lexical = join(tokens, "") == join(matchAll(input, "[^ \\t\\r\\n]"), "")
+      // Phase 0 reads syntax, phase 1 folds an atom into the product, and
+      // phase 2 checks numeric bounds. At most 64 tokens / 16 parentheses.
+      let parsed = !candidate || len(expression) > 128 || len(tokens) > 64 ? {frames: [frame], atom: null, error: "Use at most 128 characters and 64 tokens"} : !lexical ? {frames: [frame], atom: null, error: "Invalid number or operator"} : reduce(tokens, (s, t) => reduce([0, 1, 2], (r, phase) => r.error != "" ? r : phase == 0 ? (
+        num(t) != null ? (last(r.frames).need ? merge(r, {atom: num(t)}) : merge(r, {error: "Expected an operator"})) :
+        t == "(" ? (!last(r.frames).need ? merge(r, {error: "Expected an operator before ("}) : len(r.frames) >= 17 ? merge(r, {error: "Use at most 16 parentheses levels"}) : merge(r, {frames: r.frames + [frame]})) :
+        t == ")" ? (len(r.frames) == 1 || last(r.frames).need ? merge(r, {error: "Unmatched or incomplete parentheses"}) : merge(r, {atom: last(r.frames).sum + last(r.frames).term, frames: take(r.frames, len(r.frames) - 1)})) :
+        t == "+" || t == "-" ? merge(r, {frames: take(r.frames, len(r.frames) - 1) + [last(r.frames).need ? merge(last(r.frames), {unary: last(r.frames).unary * (t == "-" ? -1 : 1)}) : merge(frame, {sum: last(r.frames).sum + last(r.frames).term, unary: t == "-" ? -1 : 1})]}) :
+        last(r.frames).need ? merge(r, {error: "Expected a number"}) : merge(r, {frames: take(r.frames, len(r.frames) - 1) + [merge(last(r.frames), {op: t, need: true, unary: 1})]})
+      ) : phase == 1 ? (
+        r.atom == null ? r : abs(r.atom) > 1000000000000000 ? merge(r, {error: "Number exceeds calculator range"}) : last(r.frames).op == "/" && r.atom == 0 ? merge(r, {error: "Division by zero"}) : merge(r, {atom: null, frames: take(r.frames, len(r.frames) - 1) + [merge(last(r.frames), {term: last(r.frames).op == "*" ? last(r.frames).term * last(r.frames).unary * r.atom : last(r.frames).op == "/" ? last(r.frames).term / (last(r.frames).unary * r.atom) : last(r.frames).unary * r.atom, need: false, unary: 1})]})
+      ) : abs(last(r.frames).sum) > 1000000000000000 || abs(last(r.frames).term ?? 0) > 1000000000000000 ? merge(r, {error: "Number exceeds calculator range"}) : r, s), {frames: [frame], atom: null, error: ""})
+      let error = parsed.error != "" ? parsed.error : len(parsed.frames) != 1 || last(parsed.frames).need ? "Incomplete expression" : abs(last(parsed.frames).sum + last(parsed.frames).term) > 1000000000000000 ? "Number exceeds calculator range" : ""
+      let answer = candidate && error == "" ? last(parsed.frames).sum + last(parsed.frames).term : null
+      let rounded = answer == null ? null : round(answer, 10)
+      let answerText = answer == null ? "" : str(abs(answer - rounded) <= abs(answer) * 0.000000000000001 ? rounded : answer)
+      fill: width
+      gap: 4
+      if candidate {
+        Row {
+          fill: width
+          gap: 12
+          Text { text: error == "" ? "= " + answerText : error; font: sans; fontSize: error == "" ? 24 : 13; color: error == "" ? accent : muted; weight: 1 }
+          if answer != null {
+            Text { text: "Copy"; font: sans; fontSize: 14; color: accent; padding: [12, 10]; onTap: copy(answerText) }
+          }
+        }
+      }
+    }
+  }
+
+  component AppRow(a, searchView = false, thumbView = false, interactive = true) {
+    let rowScale = thumbView ? appScale : 1
+    Row {
+      fill: width
+      height: thumbView ? appRowHeight : null
+      align: center
+      gap: 16 * rowScale
+      padding: [4 * rowScale, thumbView ? 8 * rowScale : 12]
+      onTap: {
+        if interactive {
+        let launchKey = a.key
+        appVelocity = 0; browsing = false
+        activeSide = 0
+        railHeld = false
+        draggingSide = 0
+        letter = first(liveAlphabet) ?? "A"
+        appScroll = 0
+        appAnchor = ""
+        menu = ""
+        queryText = ""
+        if searchView { close() }
+        androidApp(launchKey)
+        }
+      }
+      onLongPress: {
+        if interactive {
+        appScroll = appOffset
+        appVelocity = 0
+        if appFirst != null { appAnchor = appFirst.id; appAnchorSection = appFirst.section; appAnchorOffset = appOffset - appFirst.top }
+        menuShortcuts = null
+        menu = a.key
+        menuShortcuts = shortcuts(a.key)
+        }
+      }
+      Popup {
+        visible: interactive && menu == a.key && menuShortcuts != null
+        position: above
+        onDismiss: menu = ""
+        width: 220
+        gap: 0
+        for shortcut in menuShortcuts ?? [] key shortcut.key {
+          Text { text: shortcut.name; fill: width; padding: [12, 14]; maxLines: 2; onTap: { menu = ""; appVelocity = 0; browsing = false; activeSide = 0; railHeld = false; draggingSide = 0; letter = first(liveAlphabet) ?? "A"; appScroll = 0; appAnchor = ""; queryText = ""; open(shortcut.key) } }
+        }
+        for actionWord in (find(drawer.apps ?? [], d => d.key == a.key || d.key == "a:" + a.key).actions ?? []) {
+          Text {
+            text: get({pin: "Add to home", info: "App info", uninstall: "Uninstall", remove: "Remove", edit: "Edit", share: "Share"}, actionWord, actionWord)
+            fill: width
+            padding: [12, 14]
+            onTap: { menu = ""; appVelocity = 0; browsing = false; activeSide = 0; railHeld = false; draggingSide = 0; letter = first(liveAlphabet) ?? "A"; appScroll = 0; appAnchor = ""; queryText = ""; appAction(actionWord, a.key) }
+          }
+        }
+      }
+      if cfg.icons {
+        Box {
+          size: 36 * rowScale
+          align: center
+          // OWL selects original/mask icons globally, not per Image.
+          // Tint only native Alpha8 masks; never tint original opaque icons.
+          if cfg.tintIcons && drawer.monochrome != true {
+            Text { text: upper(sub(trim(a.name), 0, 2)); font: sans; fontSize: 16 * rowScale; color: foreground; align: center }
+          } else if a.icon != null && a.icon != "" {
+            Image { src: a.icon; size: 36 * rowScale; tint: cfg.tintIcons ? foreground : null; label: a.name + (a.profile == null ? "" : " · " + a.profile) }
+          } else {
+            Text { text: upper(sub(trim(a.name), 0, 2)); font: sans; fontSize: 16 * rowScale; color: foreground; align: center }
+          }
+        }
+      }
+      Column {
+        weight: 1
+        gap: rowScale
+        Text { text: a.name; font: sans; fontSize: 20 * rowScale; maxLines: 1 }
+        if a.profile != null { Text { text: a.profile; font: sans; fontSize: 11 * rowScale; color: muted; maxLines: 1 } }
+      }
+    }
+  }
+
+  component AppRows(choices, searchView = false) {
+    Column {
+      lazy: true
+      fill: true
+      gap: 0
+      for a in choices key a.key {
+        AppRow { a: a; searchView: searchView }
+      }
+      if len(choices) == 0 {
+        Text { text: installed == null ? "Loading apps…" : "No matching apps"; font: sans; fontSize: 14; color: muted; padding: [4, 20] }
+      }
+    }
+  }
+
+  Box {
+    fill: true
+    ripple: false
+    onPress: { if appVelocity != 0 { appScroll = appOffset; appVelocity = 0; if appFirst != null { appAnchor = appFirst.id; appAnchorSection = appFirst.section; appAnchorOffset = appOffset - appFirst.top } } }
+    onTap: { appVelocity = 0; browsing = false; activeSide = 0; railHeld = false; draggingSide = 0; letter = first(liveAlphabet) ?? "A"; appScroll = 0; appAnchor = ""; queryText = ""; menu = ""; expandedStack = ""; replyKey = ""; replyDraft = "" }
+    Column {
+      fill: true
+      gap: 0
+      padding: [screenLeft + 24, screenTop + 12, screenRight + 24, 0]
+      visible: !browsing
+      // Both taps open views inside this face’s native launcher screen.
+      Column {
+        fill: width
+        gap: 6
+        padding: [0, compact ? 0 : 20, 0, 20]
+        Text { text: fmtTime(now, "HH:mm"); font: sans; fontSize: compact ? 36 : 48; fontWeight: 300; align: center; maxLines: 1; visible: cfg.clock; onTap: { if cfg.clockTap { queryText = ""; screenMode = "clock"; screen() } } }
+        Text { text: fmtTime(now, "EEEE, d MMMM"); font: sans; fontSize: 16; color: muted; align: center; maxLines: 1; visible: cfg.date; onTap: { if cfg.dateTap { pickedEvent = null; queryText = ""; screenMode = "calendar"; screen() } } }
+        if cfg.event && todayEvent != null {
+          Text {
+            text: todayEvent.title + " · " + (todayEvent.allDay ? "Today" : fmtTime(todayEvent.start, "HH:mm"))
+            font: sans
+            fontSize: 13
+            color: muted
+            align: center
+            maxLines: 1
+            padding: [0, 6]
+            onTap: { if cfg.eventTap { pickedEvent = todayEvent; queryText = ""; screenMode = "calendar"; screen() } }
+          }
+        }
+      }
+    }
+    if browsing {
+      Box {
+        width: appPanelWidth
+        height: appPanelHeight
+        offset: [screenLeft + 48, appSafeTop]
+        clip: true
+        drag: vertical
+        onPress: { appScroll = appOffset; appVelocity = 0; if appFirst != null { appAnchor = appFirst.id; appAnchorSection = appFirst.section; appAnchorOffset = appOffset - appFirst.top } }
+        onDrag: {
+          let position = appOffset
+          appVelocity = 0
+          appScroll = clamp(position - dy, 0, appMaxScroll)
+          if dy != 0 { appTracking = true }
+          menu = ""
+          if appFirst != null { appAnchor = appFirst.id; appAnchorSection = appFirst.section; appAnchorOffset = appOffset - appFirst.top }
+        }
+        onDragEnd: {
+          appScroll = appOffset
+          appVelocity = !browsing || railHeld || cfg.reduceMotion || abs(vy) < 160 || vy > 0 && appOffset <= 0 || vy < 0 && appOffset >= appMaxScroll ? 0 : clamp(-vy, -6000, 6000)
+          if appVelocity != 0 { appGlideStarted = time }
+          if appFirst != null { appAnchor = appFirst.id; appAnchorSection = appFirst.section; appAnchorOffset = appOffset - appFirst.top }
+        }
+        for row in appWindow key row.id {
+          // Fade by row centre: a partly clipped row must not vanish whole.
+          let rowCentre = row.top - appOffset + row.height / 2
+          let edge = clamp(min(rowCentre, appPanelHeight - rowCentre) / max(1, appFade), 0, 1)
+          let rowAlpha = edge * edge * (3 - 2 * edge)
+          Box {
+            width: appPanelWidth
+            height: row.height
+            offset: [0, row.top - appOffset]
+            opacity: rowAlpha
+            if row.heading {
+              Text { text: row.section; height: appLabelHeight; font: sans; fontSize: 22 * appScale; color: accent; maxLines: 1 }
+            } else {
+              AppRow { a: row.app; thumbView: true; interactive: rowAlpha > 0.08 && row.top >= appOffset && row.top + row.height <= appOffset + appPanelHeight }
+            }
+          }
+        }
+        if len(apps) == 0 {
+          Text { text: installed == null ? "Loading apps…" : "No installed apps"; font: sans; fontSize: 14; color: muted }
+        }
+      }
+    }
+    // The notification viewport stops above the search button, and starts
+    // below the clock. Hide it during alphabet browsing/magnification.
+    Box {
+      fill: true
+      align: topStart
+      padding: [screenLeft + 20, noticeTop, screenRight + 60, 0]
+      visible: cfg.notifications && !browsing && activeSide == 0
+      Column {
+        width: noticeWidth
+        height: max(0, noticeBottom - noticeTop)
+        clip: true
+        gap: 6
+        if notices == null {
+          Text { text: "Loading notifications…"; font: sans; fontSize: 12; color: muted }
+        } else if !notices.available {
+          Text {
+            text: "Enable notifications"
+            font: sans
+            fontSize: 12
+            color: accent
+            padding: [8, 12]
+            onTap: { queryText = ""; notification("open", "") }
+          }
+        } else if len(noticeItems) > 0 {
+          if clearableNotices > 0 {
+            Row {
+              fill: width
+              Text { text: "Notifications"; font: sans; fontSize: 13; color: muted; weight: 1; padding: [0, 10] }
+              Text { text: "Clear all"; font: sans; fontSize: 13; color: accent; padding: [12, 10]; onTap: notification("clear") }
+            }
+          }
+          Column {
+            lazy: true
+            weight: 1
+            fill: width
+            gap: 12
+            for noticeRow in noticeRows key noticeRow.id {
+              NotificationRow { item: noticeRow.item; stack: noticeRow.stack; summary: noticeRow.summary }
+            }
+          }
+        }
+      }
+    }
+    Box {
+      fill: true
+      align: topStart
+      padding: [screenLeft, railTop, 0, 0]
+      AlphabetRail { side: -1; visible: cfg.leftInput }
+    }
+    Box {
+      fill: true
+      align: topEnd
+      padding: [0, railTop, screenRight + 4, 0]
+      AlphabetRail { side: 1 }
+      // Keep the cue close to the peak, not stranded far to its left.
+      // At the screen edge, lift it above the peak to prevent an overlap.
+      if railHeld && activeSide != 0 {
+        let peakX = railBaseX - railPull
+        let bubbleX = max(screenLeft + 22, peakX - 42)
+        let peakLift = 40 * clamp((screenLeft + 56 - railThumbX) / 46, 0, 1)
+        let bubbleLift = peakLift + 66 * clamp((screenLeft + 60 - peakX) / 46, 0, 1)
+        Box {
+          size: 42
+          radius: 21
+          background: alpha(surface, 0.94)
+          align: center
+          offset: [bubbleX - railBaseX - 1, clamp(touchY - railTop - 21 - bubbleLift, 0, max(0, appSafeBottom - railTop - 42))]
+          Text { text: letter; font: sans; fontSize: 20; color: accent; bold: true; align: center }
+        }
+      }
+    }
+    Box {
+      fill: true
+      align: bottomEnd
+      padding: [0, 0, controlRight, searchBottom + 64]
+      visible: browsing && activeSide == 0
+      Box {
+        size: 48
+        radius: 24
+        background: alpha(surface, 0.85)
+        align: center
+        onTap: { appVelocity = 0; browsing = false; activeSide = 0; railHeld = false; draggingSide = 0; letter = first(liveAlphabet) ?? "A"; appScroll = 0; appAnchor = ""; queryText = ""; menu = ""; expandedStack = ""; replyKey = ""; replyDraft = "" }
+        Text { text: "×"; font: sans; fontSize: 26; align: center }
+      }
+    }
+    Box {
+      fill: true
+      align: bottomEnd
+      padding: [0, 0, controlRight, searchBottom]
+      Box {
+        size: 48
+        // Lower-letter magnification crosses this area; restore on release.
+        visible: activeSide == 0
+        radius: 24
+        background: alpha(surface, 0.85)
+        align: center
+        onTap: { activeSide = 0; railHeld = false; draggingSide = 0; letter = first(liveAlphabet) ?? "A"; appScroll = 0; appAnchor = ""; menu = ""; appVelocity = 0; browsing = false; queryText = ""; expandedStack = ""; replyKey = ""; replyDraft = ""; screenMode = "search"; screen() }
+        onLongPress: { menu = ""; activeSide = 0; railHeld = false; draggingSide = 0; appScroll = 0; appAnchor = ""; letter = first(liveAlphabet) ?? "A"; appVelocity = 0; browsing = false; resetConfirm = false; screenMode = "settings"; screen() }
+        // A native Canvas magnifier avoids relying on an unsupported icon glyph.
+        Canvas {
+          size: 24
+          circle(10, 10, 6, stroke: foreground, width: 2)
+          line(14.5, 14.5, 21, 21, stroke: foreground, width: 2, cap: round)
+        }
+      }
+    }
+  }
+
+  // OWL 21 exposes no activity-focus or screen-dismiss event to this face.
+  // Reset on explicit close, app launches, and each new search opening; Back,
+  // the frame's X and external focus loss cannot clear state through OWL.
+  // screenWidth/screenHeight stay cached after dismissal, so are not signals.
+  // OWL 21 rejects Input.focus on a face and disables automatic focus there.
+  // A native screen is the supported single-tap keyboard path; it is framed
+  // by the launcher, rather than an inline transparent search overlay.
+  screen {
+    title: screenMode == "calendarAdd" ? "Add event · calendar app" : screenMode == "settings" ? "Omagara Settings" : screenMode == "clock" ? "Clock" : screenMode == "calendar" ? "Calendar" : "Search apps"
+    if screenMode == "search" {
+      Column {
+        fill: true
+        gap: 12
+        Input {
+          text: queryText
+          placeholder: cfg.calculator ? "App name or calculation…" : "App name…"
+          fontSize: 18
+          focus: true
+          onChange: queryText = value
+          onSubmit: {
+            if len(searchResults) > 0 {
+              let launchKey = searchResults[0].key
+              appVelocity = 0; browsing = false
+              activeSide = 0
+              railHeld = false
+              draggingSide = 0
+              letter = first(liveAlphabet) ?? "A"
+              appScroll = 0
+              appAnchor = ""
+              menu = ""
+              queryText = ""
+              close()
+              androidApp(launchKey)
+            }
+          }
+        }
+        Text {
+          text: "Close search"
+          font: sans
+          fontSize: 12
+          color: muted
+          onTap: { queryText = ""; appVelocity = 0; browsing = false; activeSide = 0; railHeld = false; draggingSide = 0; letter = first(liveAlphabet) ?? "A"; appScroll = 0; appAnchor = ""; menu = ""; close() }
+        }
+        Calculator { expression: queryText }
+        Text { text: "Applications"; font: sans; fontSize: 13; color: muted }
+        for searchKey in [queryText] key searchKey {
+          AppRows { choices: searchResults; searchView: true; weight: 1; fill: width }
+        }
+      }
+    } else if screenMode == "settings" {
+      Column {
+        fill: true
+        scroll: true
+        gap: 8
+        Text { text: "Omagara only"; font: sans; fontSize: 20; color: accent }
+        Text { text: "Long-press Search to return here. Themed icons use native monochrome masks when available through launcher styling; otherwise neutral initials replace icons. No original app colors are shown in themed mode."; font: sans; color: muted; fontSize: 13 }
+        for pref in preferenceRows {
+          Column {
+            fill: width
+            gap: 0
+            if pref.section != null { Text { text: pref.section; color: accent; padding: [0, 18, 0, 6]; font: sans } }
+            Row {
+              fill: width
+              align: center
+              padding: [8, 14]
+              onTap: { if pref.key != "searchContacts" { prefs = set(prefs, pref.key, !get(cfg, pref.key)) }; menu = "" }
+              Text { text: pref.name; font: sans; fontSize: 15; weight: 1 }
+              Text { text: get(cfg, pref.key) ? "ON" : "OFF"; color: get(cfg, pref.key) ? accent : muted; fontSize: 14 }
+            }
+          }
+        }
+        Text { text: "Alphabet touch feedback"; color: accent; padding: [0, 18, 0, 6] }
+        Flow {
+          fill: width
+          gap: 8
+          for mode in hapticChoices {
+            Button { text: (cfg.hapticFeedback == mode ? "✓ " : "") + mode; onTap: prefs = set(prefs, "hapticFeedback", mode) }
+          }
+        }
+        Text { text: "Reduced vibrates on every second letter change. Every letter vibrates on each change. Android controls vibration strength and may disable touch feedback."; font: sans; fontSize: 13; color: muted }
+        Text { text: "Application Browser"; color: accent; padding: [0, 18, 0, 6] }
+        Text { text: "Application Scale · " + str(cfg.appScale) + "%"; font: sans; fontSize: 15 }
+        Slider {
+          value: cfg.appScale
+          min: 75
+          max: 115
+          step: 5
+          live: true
+          onChange: { letter = highlightedLetter; appTracking = false; prefs = set(prefs, "appScale", clamp(round(value / 5) * 5, 75, 115)) }
+        }
+        Text { text: "80% is the default. 100% restores the previous browser sizing. Search and home content keep their size."; font: sans; fontSize: 13; color: muted }
+        Button { text: "Reset Application Scale to 80%"; onTap: { letter = highlightedLetter; appTracking = false; prefs = set(prefs, "appScale", 80) } }
+        Text { text: "Contact search is unavailable in this launcher: OWL 21 has no contacts source or permission action. It stays OFF and reads no contacts."; font: sans; fontSize: 13; color: muted }
+        Text { text: "World clocks"; color: accent; padding: [0, 18, 0, 6] }
+        Text { text: "Select zones; daylight-saving changes follow Android's time-zone database."; font: sans; fontSize: 13; color: muted }
+        for zone in zoneChoices {
+          Text { text: (contains(worldZones, zone) ? "✓ " : "+ ") + zone; font: sans; padding: [8, 14]; color: contains(worldZones, zone) ? accent : foreground; onTap: worldZones = contains(worldZones, zone) ? worldZones.filter(z => z != zone) : worldZones + [zone] }
+        }
+        Text { text: "Home"; color: accent; padding: [0, 18, 0, 6] }
+        Button { text: "Go to face page 0"; onTap: launcher("page:0") }
+        Button { text: "Go to widget page 1"; onTap: launcher("page:1") }
+        Text { text: "These buttons open existing pages without changing your default home page or page layout. Choose your default home page in launcher settings."; font: sans; fontSize: 13; color: muted }
+        Button { text: "Android default launcher / launcher settings"; onTap: launcher("settings") }
+        Text { text: "Preferences"; color: accent; padding: [0, 18, 0, 6] }
+        Button { text: "Export Omagara settings to clipboard"; onTap: copy(toJson({version: 1, prefs: cfg, zones: worldZones})) }
+        Input { text: importText; placeholder: "Paste Omagara settings JSON"; lines: 3; onChange: importText = value }
+        Button {
+          text: "Import Omagara settings"
+          onTap: {
+            let imported = parseJson(importText)
+            if imported.version == 1 && all(keys(defaults), k => k == "appScale" ? get(imported.prefs, k) == null || contains(appScaleChoices, get(imported.prefs, k)) : k == "hapticFeedback" ? get(imported.prefs, k) == null || contains(hapticChoices, get(imported.prefs, k)) : get(imported.prefs, k) == true || get(imported.prefs, k) == false || (k == "calculator" || k == "searchContacts") && get(imported.prefs, k) == null) && sub(toJson(imported.zones), 0, 1) == "[" && all(imported.zones, z => contains(zoneChoices, z)) {
+              letter = highlightedLetter; appTracking = false
+              prefs = reduce(keys(defaults), (m, k) => set(m, k, k == "searchContacts" ? false : (get(imported.prefs, k) ?? get(defaults, k))), {})
+              worldZones = unique(imported.zones ?? [])
+              importStatus = "Settings imported"
+            } else { importStatus = "Invalid settings: export version 1 with boolean preferences, Application Scale 75–115 in steps of 5, valid haptic mode, and supported zones required" }
+          }
+        }
+        if importStatus != "" { Text { text: importStatus; fontSize: 13; color: muted } }
+        Button { text: "Reset Omagara settings to defaults…"; onTap: resetConfirm = true }
+        if resetConfirm {
+          Text { text: "Reset Omagara appearance and world clocks?"; font: sans }
+          Row {
+            Button { text: "Confirm reset"; onTap: { letter = highlightedLetter; appTracking = false; prefs = {}; worldZones = []; resetConfirm = false; importText = ""; importStatus = "" } }
+            Button { text: "Cancel"; onTap: resetConfirm = false }
+          }
+        }
+      }
+    } else if screenMode == "clock" {
+      Column {
+        fill: true
+        gap: 12
+        Flow {
+          fill: width
+          gap: 4
+          for tabName in ["alarms", "timer", "stopwatch", "world"] {
+            Text { text: tabName; font: sans; color: clockTab == tabName ? accent : muted; padding: [10, 14]; onTap: clockTab = tabName }
+          }
+        }
+        Column {
+          weight: 1
+          fill: width
+          scroll: true
+          gap: 16
+          if clockTab == "alarms" {
+            Text { text: fmtTime(now, "HH:mm"); font: sans; fontSize: 56; fontWeight: 300; align: center }
+            Text { text: fmtTime(now, "EEEE, d MMMM"); font: sans; fontSize: 18; align: center }
+            Text { text: nextAlarm.set ? "Next alarm · " + fmtTime(nextAlarm.time, "EEE HH:mm") : "No upcoming alarm"; font: sans; fontSize: 16; align: center; color: muted }
+            if nextAlarm.set && nextAlarm.app != null {
+              Button { text: "Manage alarms in clock app"; onTap: androidApp(nextAlarm.app) }
+              Button { text: "+ New alarm in clock app"; onTap: androidApp(nextAlarm.app) }
+            }
+            Text { text: "Android exposes only the next alarm here. New alarms and reminders must be created in your clock or calendar app; Omagara cannot register them."; font: sans; fontSize: 14; color: muted }
+            Button { text: "Find a clock or reminder app"; onTap: { queryText = ""; screenMode = "search" } }
+          } else if clockTab == "timer" {
+            Text { text: "${floor(remaining / 3600)}:${pad(floor(remaining / 60) % 60, 2, "0")}:${pad(floor(remaining) % 60, 2, "0")}"; font: sans; fontSize: 42; align: center }
+            Text { text: "Duration (minutes, 1–1440)"; font: sans; fontSize: 14; color: muted }
+            Input { text: timerMinutes; placeholder: "Duration in minutes (1–1440)"; onChange: timerMinutes = value }
+            Flow {
+              Button { text: timerDeadline > 0 ? "Pause" : timerLeft > 0 ? "Resume" : "Start"; onTap: {
+                if timerDeadline > 0 { timerLeft = remaining; timerDeadline = 0 }
+                else if timerLeft > 0 { timerDeadline = seconds + timerLeft; timerLeft = 0 }
+                else if num(timerMinutes) >= 1 && num(timerMinutes) <= 1440 { timerDeadline = seconds + num(timerMinutes) * 60 }
+              } }
+              Button { text: "Reset"; onTap: { timerDeadline = 0; timerLeft = 0 } }
+            }
+            Text { text: "A local deadline survives launcher restarts. Its notification needs launcher notification permission and may arrive late after sleep. Use your clock app for a reliable waking alarm."; font: sans; fontSize: 14; color: muted }
+          } else if clockTab == "stopwatch" {
+            Text { text: "${floor(elapsed / 3600)}:${pad(floor(elapsed / 60) % 60, 2, "0")}:${pad(floor(elapsed) % 60, 2, "0")}"; font: sans; fontSize: 42; align: center }
+            Row {
+              Button { text: watchStarted > 0 ? "Pause" : "Start / resume"; onTap: { if watchStarted > 0 { watchElapsed = elapsed; watchStarted = 0 } else { watchStarted = seconds } } }
+              Button { text: "Reset"; onTap: { watchStarted = 0; watchElapsed = 0 } }
+            }
+            Text { text: "Elapsed wall-clock time, to the second. Manual system clock changes affect it; not intended for precision timing."; font: sans; fontSize: 13; color: muted }
+          } else {
+            for zone in worldZones {
+              Row {
+                fill: width
+                align: center
+                padding: [0, 10]
+                Column { weight: 1; Text { text: zone; font: sans; fontSize: 14; color: muted }; Text { text: fmtTime(now, "EEE d MMM · HH:mm", zone); font: sans; fontSize: 22 } }
+                Text { text: "×"; padding: [16, 14]; onTap: worldZones = worldZones.filter(z => z != zone) }
+              }
+            }
+            Button { text: "Add / select world clocks"; onTap: { resetConfirm = false; screenMode = "settings" } }
+          }
+        }
+      }
+    } else {
+      Column {
+        fill: true
+        gap: 12
+        if pickedEvent != null {
+          Button { text: "‹ Back to events"; onTap: pickedEvent = null }
+          Column {
+            weight: 1
+            fill: width
+            scroll: true
+            gap: 16
+            Text { text: pickedEvent.title; font: sans; fontSize: 26 }
+            Text { text: fmtTime(pickedEvent.start, "EEEE d MMMM yyyy"); font: sans; fontSize: 18 }
+            Text { text: pickedEvent.allDay ? "All day · through " + fmtTime(pickedEvent.end - 1, "EEE d MMM") : fmtTime(pickedEvent.start, "HH:mm") + " – " + fmtTime(pickedEvent.end, "EEE d MMM HH:mm"); font: sans; fontSize: 18 }
+            Text { text: pickedEvent.calendar; font: sans; color: muted }
+            if (pickedEvent.description ?? "") != "" { Text { text: pickedEvent.description; font: sans } }
+            if (pickedEvent.location ?? "") != "" { Text { text: pickedEvent.location; font: sans; fontSize: 16 } }
+            Text { text: "Full details and editing are available in your calendar app."; font: sans; fontSize: 13; color: muted }
+            Button { text: "Open event in calendar app"; onTap: calendar("open", pickedEvent) }
+          }
+        } else {
+          Row {
+            fill: width
+            Text { text: "Upcoming events"; font: sans; fontSize: 20; weight: 1 }
+            Text { text: "+ Add in calendar app"; font: sans; fontSize: 14; color: accent; padding: [8, 14]; onTap: screenMode = "calendarAdd" }
+          }
+          if screenMode == "calendarAdd" {
+            Text { text: "OWL 21 cannot create events or prefill a new event. Open your calendar app, then use its + control to choose a date, time, title and description. Nothing has been created here."; font: sans }
+            Button { text: "Open calendar app"; onTap: calendar("open") }
+            Button { text: "Back to integrated calendar"; onTap: screenMode = "calendar" }
+          } else if !agenda.granted {
+            Text { text: "Show upcoming events from your phone’s calendars here."; font: sans; fontSize: 16 }
+            Button { text: "Allow calendar access"; onTap: calendar("request") }
+          } else {
+            Flow {
+              Button { text: "‹ Day"; onTap: { calendarDay = fmtTime(selectedNoon - 86400, "yyyy-MM-dd"); upcoming = false } }
+              Button { text: "Today"; onTap: { calendarDay = ""; upcoming = false } }
+              Button { text: "Day ›"; onTap: { calendarDay = fmtTime(selectedNoon + 86400, "yyyy-MM-dd"); upcoming = false } }
+              Button { text: "Upcoming"; onTap: upcoming = true }
+            }
+            Text { text: upcoming ? "Next two weeks" : fmtTime(selectedNoon, "EEEE d MMMM"); font: sans; color: accent }
+            Text { text: "Phone calendars expose only unended events from today through the next 14 days."; font: sans; fontSize: 12; color: muted }
+            if len(calendarEvents) == 0 { Text { text: "No events in the available calendar data"; font: sans; color: muted } }
+            Column {
+              lazy: true
+              weight: 1
+              fill: width
+              gap: 8
+              for event in calendarEvents key event.id {
+                Column {
+                  fill: width
+                  padding: [12, 16]
+                  radius: 12
+                  background: surface
+                  gap: 6
+                  onTap: pickedEvent = event
+                  Text { text: event.allDay ? fmtTime(event.start, "EEE d MMM") + " · All day" : fmtTime(event.start, "EEE d MMM HH:mm"); font: sans; fontSize: 13; color: muted }
+                  Text { text: event.title; font: sans; fontSize: 18; bold: true }
+                  Text { text: event.calendar; font: sans; fontSize: 12; color: muted }
+                  if event.location != "" { Text { text: event.location; font: sans; fontSize: 13; color: muted } }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+  }
+}
