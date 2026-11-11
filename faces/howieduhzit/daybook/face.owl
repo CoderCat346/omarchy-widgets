@@ -1,0 +1,991 @@
+face "Daybook" {
+  // Daybook: a theme-aware planner with quick capture, reminders and quiet progress.
+  // Its lists and tasks are kept by the launcher; nothing here needs Linux or a package.
+
+  meta {
+    owl: 16
+    description: "Daybook: a planner with launcher theme colors, ruled lists, quick capture and reminders"
+    version: "3.0"
+    license: "MIT"
+    category: "productivity"
+  }
+
+  // What it says, in the phone's language where it has a set.
+  strings {
+    en {
+      name: "Daybook"
+      tasksDue: n => n == 1 ? "1 task due" : "${n} tasks due"
+
+      // The undo row.
+      taskReopened: "Task reopened"
+      taskFinished: "Task finished"
+      taskDeleted: "Task deleted"
+      listDeleted: "List deleted"
+      doneCleared: "done cleared"
+
+      // Lists and their menu.
+      masthead: "DAYBOOK / DAILY LISTS"
+      listToday: "today"
+      listShopping: "shopping"
+      listSomeday: "someday"
+      renameList: "rename list"
+      saveName: "Save name"
+      deleteList: "Delete list…"
+      deleteListConfirm: n => n == 1 ? "Delete this list and its 1 task?" : "Delete this list and ${n} tasks?"
+      cancel: "cancel"
+      cancelTitle: "Cancel"
+      addList: "+ list"
+      newList: "new list"
+      listName: "List name"
+      createList: "Create list"
+
+      // Tasks.
+      toDo: n => "${n} TO DO"
+      finished: n => "${n} FINISHED"
+      emptyTitle: "Room for what matters."
+      emptyHint: "Start with one small thing below."
+      doneTitle: "A little lighter."
+      doneCount: n => n == 1 ? "1 finished" : "${n} finished"
+      hideDone: "hide done"
+      showDone: n => "done ${n}"
+      clearDone: "clear"
+      undoLabel: "undo"
+      addPlaceholder: "Add a task…"
+      addButton: "Add"
+      hint: "Tap task to edit · check to finish"
+      planTask: "+ Plan task"
+
+      // Reminders.
+      duePrefix: "Due · "
+      today: "Today"
+      tomorrow: "Tomorrow"
+      once: "Once"
+      daily: "Daily"
+      weekly: "Weekly"
+      invalidDate: "Choose a valid date."
+      pastTime: "That time has passed. Choose a later time or tomorrow."
+
+      // The task editor.
+      screenReminder: "Daybook · Reminder"
+      screenNew: "Daybook · New task"
+      screenEdit: "Daybook · Edit task"
+      newTitle: "Make room for a task."
+      editTitle: "A plan for this task."
+      taskLabel: "TASK"
+      taskPlaceholder: "What needs doing?"
+      listLabel: "LIST"
+      setReminder: "Set a reminder"
+      reminderLabel: "REMINDER"
+      noReminder: "No reminder"
+      in15: "In 15 min"
+      inHour: "In 1 hour"
+      tomorrow9: "Tomorrow, 9 AM"
+      chooseDateTime: "Choose date & time"
+      chooseDay: "Choose a day"
+      fewerDays: "Fewer days"
+      moreDates: "More dates…"
+      enterDate: "Or enter a date (YYYY-MM-DD)"
+      chooseTime: "Choose a time"
+      am: "AM ⇄"
+      pm: "PM ⇄"
+      repeatTitle: "Repeat"
+      finishedHint: "This task is finished. Reopen it from the list to set a reminder."
+      positionLabel: "POSITION"
+      keepOrder: "Keep order"
+      moveTop: "Move to top"
+      moveBottom: "Move to bottom"
+      deleteConfirm: "Tap again to delete this task"
+      deleteTask: "Delete task…"
+      back: "Back"
+      useReminder: "Use reminder"
+      createTask: "Create task"
+      saveChanges: "Save changes"
+      reminderAt: t => "Reminder: ${t}"
+      needName: "Give this task a name."
+      changed: "This task or list changed. Close and reopen the editor."
+      hourLabel: "HOUR"
+      minuteLabel: "MINUTE"
+    }
+  }
+
+  requires { pacman: [] }
+
+  source now = clock every 1m
+
+  state pages = [
+    { name: str.listToday, tasks: [] },
+    { name: str.listShopping, tasks: [] },
+    { name: str.listSomeday, tasks: [] }
+  ] persist
+  state current = 0 persist
+  state showDone = false persist
+  state adding = false
+  state listMenu = false
+  state listDraft = ""
+  state deleteListConfirm = false
+  state openTask = null
+  state editorList = 0
+  state destination = 0
+  state draftText = ""
+  state captureText = ""
+  state hasReminder = false
+  state draftDate = ""
+  state draftHour = 9
+  state draftMinute = 0
+  state draftRepeat = "once"
+  state editorError = ""
+  state confirmDelete = false
+  state pickingReminder = false
+  state otherDate = false
+  state draftPosition = "keep"
+  state undo = null
+
+  let list = pages[current] ?? { name: "", tasks: [] }
+  let tasks = list.tasks ?? []
+  let active = tasks.filter(t => !t.done)
+  let done = tasks.filter(t => t.done)
+  let progress = len(tasks) == 0 ? 0 : len(done) / len(tasks) * 100
+  let editing = (pages[editorList].tasks ?? []).find(t => t.id == openTask)
+  let pickedAt = hasReminder ? parseTime("${draftDate} ${pad(draftHour, 2, "0")}:${pad(draftMinute, 2, "0")}", "yyyy-MM-dd HH:mm") : null
+  // Preserve the original timestamp when only the task text/list changes.
+  let draftAt = hasReminder && editing.remindAt != null && fmtTime(pickedAt, "yyyy-MM-dd HH:mm") == fmtTime(editing.remindAt, "yyyy-MM-dd HH:mm") ? editing.remindAt : pickedAt
+  let reminderError = !hasReminder ? "" : draftAt == null || fmtTime(draftAt, "yyyy-MM-dd") != draftDate ? str.invalidDate : draftAt <= now && (draftAt != editing.remindAt || draftRepeat != (editing.repeat ?? "once")) ? str.pastTime : ""
+  on draftAt { editorError = "" }
+  let wide = (tileWidth ?? 0) > (tileHeight ?? 1)
+
+  // Semantic colors follow the active launcher theme in the face and editor.
+  let paper = background
+  let ink = foreground
+  let soft = muted
+  let olive = accent
+  let rule = border
+  let wash = surface
+
+  // Every task with a reminder still waiting, across all lists.
+  let allReminders = flatten(pages.map(p => p.tasks ?? [])).filter(t => !t.done && t.remindAt != null && t.notifiedAt != t.remindAt)
+  let nextRemind = len(allReminders) == 0 ? null : min(allReminders.map(t => t.remindAt))
+
+  // Works while the face is off screen too. A repeated reminder moves itself to its next turn.
+  at nextRemind {
+    let firedAt = max(now, nextRemind)
+    let due = allReminders.filter(t => t.remindAt <= nextRemind)
+    if len(due) > 0 {
+      notify(str.name, len(due) == 1 ? due[0].text : str.tasksDue(len(due)))
+      pages = pages.map(p => merge(p, {
+        tasks: (p.tasks ?? []).map(t => !t.done && t.remindAt != null && t.remindAt <= nextRemind ? (t.repeat ?? "once") == "daily" ? merge(t, { remindAt: t.remindAt + (floor((firedAt - t.remindAt) / 86400) + 1) * 86400 }) : (t.repeat ?? "once") == "weekly" ? merge(t, { remindAt: t.remindAt + (floor((firedAt - t.remindAt) / 604800) + 1) * 604800 }) : merge(t, { notifiedAt: t.remindAt }) : t)
+      }))
+    }
+  }
+
+  background: paper
+  padding: 0
+
+  component Check(item) {
+    Box {
+      size: 24
+      radius: 6
+      border: 1.5
+      borderColor: item.done ? olive : alpha(olive, 0.5)
+      background: item.done ? olive : alpha(olive, 0)
+      align: center
+      if item.done {
+        Text { font: sans; text: "✓"; fontSize: 14; color: paper; align: center }
+      }
+    }
+  }
+
+  component Task(item) {
+    Row {
+      fill: width
+      gap: 4
+      align: center
+      Box {
+        width: 44
+        height: 48
+        align: center
+        onTap: {
+          haptic()
+          let old = tasks
+          undo = { list: current, toggled: item.id, wasDone: item.done, label: item.done ? str.taskReopened : str.taskFinished }
+          pages = set(pages, current, merge(list, { tasks: old.map(t => t.id == item.id ? merge(t, { done: !t.done }) : t) }))
+        }
+        Check { item: item }
+      }
+      Column {
+        weight: 1
+        gap: 5
+        padding: [4, 14]
+        onTap: {
+          editorList = current
+          destination = current
+          openTask = item.id
+          draftText = item.text
+          hasReminder = !item.done && item.remindAt != null
+          draftDate = fmtTime(item.remindAt ?? now, "yyyy-MM-dd")
+          draftHour = item.remindAt == null ? 9 : num(fmtTime(item.remindAt, "H"))
+          draftMinute = item.remindAt == null ? 0 : num(fmtTime(item.remindAt, "m"))
+          draftRepeat = item.repeat ?? "once"
+          editorError = ""
+          confirmDelete = false
+          pickingReminder = false
+          otherDate = false
+          draftPosition = "keep"
+          screen()
+        }
+        Text { text: item.text; font: sans; fontSize: 17; color: item.done ? soft : ink; maxLines: 3 }
+        if item.remindAt != null && !item.done {
+          Text {
+            text: "${item.remindAt <= now ? str.duePrefix : ""}${fmtTime(item.remindAt, "yyyy-MM-dd") == fmtTime(now, "yyyy-MM-dd") ? str.today : fmtTime(item.remindAt, "yyyy-MM-dd") == fmtTime(now + 86400, "yyyy-MM-dd") ? str.tomorrow : fmtTime(item.remindAt, "EEE d MMM")} · ${fmtTime(item.remindAt, "h:mm a")}${(item.repeat ?? "once") == "daily" ? " · " + str.daily : (item.repeat ?? "once") == "weekly" ? " · " + str.weekly : ""}"
+            font: sans
+            fontSize: 12
+            color: item.remindAt <= now ? red : olive
+            maxLines: 2
+          }
+        }
+      }
+      Box {
+        width: 40
+        height: 48
+        align: center
+        onTap: {
+          editorList = current
+          destination = current
+          openTask = item.id
+          draftText = item.text
+          hasReminder = !item.done && item.remindAt != null
+          draftDate = fmtTime(item.remindAt ?? now, "yyyy-MM-dd")
+          draftHour = item.remindAt == null ? 9 : num(fmtTime(item.remindAt, "H"))
+          draftMinute = item.remindAt == null ? 0 : num(fmtTime(item.remindAt, "m"))
+          draftRepeat = item.repeat ?? "once"
+          editorError = ""
+          confirmDelete = false
+          pickingReminder = false
+          otherDate = false
+          draftPosition = "keep"
+          screen()
+        }
+        Text { text: "›"; font: sans; fontSize: 24; color: soft; align: center }
+      }
+    }
+  }
+
+  component Tab(l, i) {
+    let n = len((l.tasks ?? []).filter(t => !t.done))
+    Row {
+      gap: 6
+      align: center
+      padding: [12, 9]
+      radius: 5
+      border: 1
+      borderColor: i == current ? olive : rule
+      background: i == current ? olive : paper
+      onTap: { current = i; undo = null }
+      Text { font: sans; text: l.name; style: small; color: i == current ? paper : soft; maxLines: 1 }
+      if n > 0 {
+        Text { text: "${n}"; fontSize: 11; color: i == current ? paper : soft }
+      }
+    }
+  }
+
+  component Masthead() {
+    Row {
+      gap: 12
+      align: center
+      padding: [0, 4]
+      Column {
+        weight: 1
+        gap: 10
+        Text { text: str.masthead; font: mono; fontSize: 10; color: olive; letterSpacing: 2 }
+        Text { color: ink; text: list.name; font: serif; fontSize: 48; fontWeight: 400; letterSpacing: -1.5; maxLines: 1 }
+      }
+      Box {
+        size: 40
+        radius: 6
+        border: 1
+        borderColor: rule
+        align: center
+        background: alpha(ink, 0.06)
+        Text { font: sans; text: "···"; fontSize: 19; color: soft; align: center; onTap: { listDraft = list.name; listMenu = true; deleteListConfirm = false } }
+        Popup {
+          background: paper
+          border: 1
+          borderColor: rule
+          radius: 8
+          padding: 16
+          visible: listMenu
+          width: 240
+          onDismiss: listMenu = false
+          Column {
+            gap: 10
+            Text { font: sans; text: str.renameList; style: label; color: soft }
+            Input {
+            color: ink
+              text: listDraft
+              onChange: listDraft = value
+              underline: false
+              onSubmit: {
+                if trim(value) != "" {
+                  pages = set(pages, current, merge(list, { name: trim(value) }))
+                  listMenu = false
+                }
+              }
+            }
+            Text {
+              text: str.saveName
+              font: sans
+              color: olive
+              padding: [0, 12]
+              onTap: {
+                if trim(listDraft) != "" {
+                  pages = set(pages, current, merge(list, { name: trim(listDraft) }))
+                  listMenu = false
+                }
+              }
+            }
+            if len(pages) > 1 {
+              Text {
+                text: deleteListConfirm ? str.deleteListConfirm(len(tasks)) : str.deleteList
+                color: red
+                onTap: {
+                  if deleteListConfirm {
+                    undo = { removedPage: list, list: current, label: str.listDeleted }
+                    pages = remove(pages, current)
+                    current = clamp(current, 0, len(pages) - 1)
+                    listMenu = false
+                  } else { deleteListConfirm = true }
+                }
+              }
+            }
+            Text { font: sans; color: ink; text: str.cancel; style: muted; onTap: listMenu = false }
+          }
+        }
+      }
+    }
+  }
+
+  component DateLine() {
+    Text { text: fmtTime(now, "EEEE, d MMMM"); font: serif; italic: true; fontSize: 16; color: soft; padding: [0, 8]; maxLines: 1 }
+  }
+
+  component ProgressLine() {
+    Column {
+      gap: 12
+      padding: [0, 16, 0, 20]
+      Box { height: 1; fill: width; background: ink }
+      Row {
+        align: center
+        Text { text: str.toDo(len(active)); font: mono; fontSize: 10; letterSpacing: 1.5; color: olive; weight: 1 }
+        Text { text: str.finished(len(done)); font: mono; fontSize: 10; letterSpacing: 1; color: soft }
+      }
+      Progress { value: progress; color: olive; track: rule; height: 3 }
+    }
+  }
+
+  component Tabs() {
+    Flow {
+      gap: 8
+      padding: [0, 0, 0, 16]
+      for l, i in pages key i {
+        Tab { l: l; i: i }
+      }
+      Box {
+        width: 58
+        radius: 5
+        align: center
+        Text { font: sans; text: str.addList; fontSize: 12; color: olive; padding: [4, 9]; onTap: { listDraft = ""; adding = true } }
+        Popup {
+          background: paper
+          border: 1
+          borderColor: rule
+          radius: 8
+          padding: 16
+          visible: adding
+          width: 240
+          onDismiss: adding = false
+          Column {
+            gap: 10
+            Text { font: sans; text: str.newList; style: label; color: soft }
+            Input {
+            color: ink
+              text: listDraft
+              placeholder: str.listName
+              onChange: listDraft = value
+              clear: true
+              underline: false
+              onSubmit: {
+                if trim(value) != "" {
+                  pages = pages + [{ name: trim(value), tasks: [] }]
+                  current = len(pages) - 1
+                  adding = false
+                }
+              }
+            }
+            Text {
+              text: str.createList
+              font: sans
+              color: olive
+              padding: [0, 12]
+              onTap: {
+                if trim(listDraft) != "" {
+                  pages = pages + [{ name: trim(listDraft), tasks: [] }]
+                  current = len(pages) - 1
+                  adding = false
+                  undo = null
+                }
+              }
+            }
+            Text { font: sans; color: ink; text: str.cancel; style: muted; onTap: adding = false }
+          }
+        }
+      }
+    }
+  }
+
+  component TaskList() {
+    Column {
+      gap: 0
+      weight: 1
+      scroll: true
+      if len(active) == 0 {
+        Column {
+          gap: 5
+          padding: [0, 32]
+          if len(done) == 0 {
+            Text { text: str.emptyTitle; font: serif; fontSize: 27; color: ink }
+            Text { text: str.emptyHint; font: sans; fontSize: 14; color: soft }
+          } else {
+            Text { text: str.doneTitle; font: serif; fontSize: 28; color: olive }
+            Text { text: str.doneCount(len(done)); style: small; color: soft }
+          }
+        }
+      }
+      for t in active key t.id {
+        Task { item: t }
+        Box { height: 1; fill: width; background: rule }
+      }
+      if len(done) > 0 {
+        Row {
+          gap: 8
+          align: center
+          padding: [16, 4, 4, 4]
+          Text { text: showDone ? str.hideDone : str.showDone(len(done)); style: label; color: soft; weight: 1; onTap: showDone = !showDone }
+          if showDone {
+            Text {
+              text: str.clearDone
+              style: label
+              color: soft
+              onTap: {
+                let old = tasks
+                let cleared = old.filter(t => t.done)
+                if len(cleared) > 0 {
+                  haptic()
+                  undo = { list: current, index: len(old), tasks: cleared, label: str.doneCleared }
+                  pages = set(pages, current, merge(list, { tasks: old.filter(t => !t.done) }))
+                }
+              }
+            }
+          }
+        }
+        if showDone {
+          for t in done key t.id {
+            Task { item: t }
+            Box { height: 1; fill: width; background: rule }
+          }
+        }
+      }
+      Spacer { height: 8 }
+    }
+  }
+
+  component UndoRow() {
+    if undo != null {
+      Row {
+        gap: 10
+        align: center
+        padding: [8, 10]
+        background: alpha(olive, 0.12)
+        radius: 6
+        Text { font: sans; text: undo.label; style: small; color: ink; weight: 1; maxLines: 1 }
+        Text {
+          text: str.undoLabel
+          style: label
+          color: olive
+          onTap: {
+            let u = undo
+            let p = pages[u.list]
+            if u.removedPage != null {
+              let atIndex = clamp(u.list, 0, len(pages))
+              pages = pages.take(atIndex) + [u.removedPage] + pages.drop(atIndex)
+              current = atIndex
+            } else if p != null {
+              let ts = p.tasks ?? []
+              let i = clamp(u.index, 0, len(ts))
+              pages = set(pages, u.list, merge(p, { tasks: u.toggled != null ? ts.map(t => t.id == u.toggled ? merge(t, { done: u.wasDone }) : t) : ts.take(i) + u.tasks + ts.drop(i) }))
+              current = u.list
+            }
+            undo = null
+          }
+        }
+        Text { font: sans; text: "✕"; style: label; color: soft; onTap: undo = null }
+      }
+    }
+  }
+
+  component QuickAdd() {
+    Column {
+      gap: 8
+      padding: [0, 10, 0, 0]
+      Row {
+        gap: 6
+        align: center
+        padding: [10, 4]
+        background: wash
+        radius: 8
+        border: 1
+        borderColor: rule
+        Input {
+          text: captureText
+          placeholder: str.addPlaceholder
+          color: ink
+          underline: false
+          fontSize: 16
+          weight: 1
+          onChange: captureText = value
+          onSubmit: { if trim(captureText) != "" {
+              pages = set(pages, current, merge(list, { tasks: [{ id: random(1000000000), text: trim(captureText), done: false, remindAt: null, repeat: "once" }] + tasks }))
+              captureText = ""
+              undo = null
+              haptic()
+            } }
+        }
+        Box {
+          width: 64
+          align: center
+          padding: [10, 12]
+          radius: 6
+          background: trim(captureText) == "" ? rule : olive
+          onTap: { if trim(captureText) != "" {
+              pages = set(pages, current, merge(list, { tasks: [{ id: random(1000000000), text: trim(captureText), done: false, remindAt: null, repeat: "once" }] + tasks }))
+              captureText = ""
+              undo = null
+              haptic()
+            } }
+          Text { text: str.addButton; color: trim(captureText) == "" ? soft : paper; font: sans; fontSize: 14 }
+        }
+      }
+      Row {
+        align: center
+        Text { text: str.hint; maxLines: 2; color: soft; font: sans; fontSize: 11; weight: 1 }
+        Box {
+          width: 104
+          align: center
+          padding: [8, 12]
+          onTap: { editorList = current
+          destination = current
+          openTask = null
+          draftText = captureText
+          hasReminder = false
+          draftDate = fmtTime(now, "yyyy-MM-dd")
+          draftHour = 9
+          draftMinute = 0
+          draftRepeat = "once"
+          editorError = ""
+          confirmDelete = false
+          pickingReminder = false
+          otherDate = false
+          draftPosition = "keep"
+          screen() }
+          Text { text: str.planTask; color: olive; font: sans; fontSize: 13 }
+        }
+      }
+    }
+  }
+
+  Box {
+    fill: true
+    padding: [12, 8]
+
+    Column {
+      fill: true
+      gap: 0
+      padding: [16, 20, 16, 10]
+      background: paper
+      border: 1
+      borderColor: rule
+      radius: 8
+
+      if wide {
+        Row {
+          fill: true
+          gap: 24
+          Column {
+            width: clamp((tileWidth ?? 800) * 0.32, 240, 380)
+            fill: height
+            gap: 0
+            Masthead { }
+            DateLine { }
+            ProgressLine { }
+            Tabs { }
+            Spacer { weight: 1 }
+            UndoRow { }
+            QuickAdd { }
+            Spacer { height: screenInset }
+          }
+          Column {
+            weight: 1
+            fill: height
+            gap: 0
+            TaskList { }
+            Spacer { height: screenInset }
+          }
+        }
+      } else {
+        Column {
+          fill: true
+          gap: 0
+          if screenInset < 120 {
+            Masthead { }
+            DateLine { }
+            ProgressLine { }
+          }
+          Tabs { }
+          Spacer { height: 10 }
+          TaskList { }
+          UndoRow { }
+          QuickAdd { }
+          Spacer { height: screenInset }
+        }
+      }
+    }
+  }
+
+  component ReminderPreset(label, delay) {
+    Text {
+      text: label
+      font: sans
+      fontSize: 14
+      color: olive
+      background: wash
+      radius: 6
+      padding: [14, 14]
+      onTap: {
+        let target = now + delay
+        hasReminder = true
+        draftDate = fmtTime(target, "yyyy-MM-dd")
+        draftHour = num(fmtTime(target, "H"))
+        draftMinute = num(fmtTime(target, "m"))
+        editorError = ""
+      }
+    }
+  }
+
+  component DayChoice(label, offset) {
+    let dateValue = fmtTime(now + offset * 86400, "yyyy-MM-dd")
+    Text {
+      text: label
+      font: sans
+      fontSize: 14
+      padding: [14, 14]
+      radius: 6
+      background: draftDate == dateValue ? olive : wash
+      color: draftDate == dateValue ? paper : olive
+      onTap: { draftDate = dateValue; hasReminder = true; editorError = "" }
+    }
+  }
+
+  component RepeatChoice(label, choice) {
+    Text {
+      text: label
+      font: sans
+      fontSize: 14
+      padding: [14, 14]
+      radius: 6
+      background: draftRepeat == choice ? olive : wash
+      color: draftRepeat == choice ? paper : olive
+      onTap: draftRepeat = choice
+    }
+  }
+
+  component TimePart(part) {
+    Column {
+      weight: 1
+      gap: 4
+      background: wash
+      radius: 8
+      Text { text: part == "hour" ? str.hourLabel : str.minuteLabel; font: mono; fontSize: 10; color: soft; align: center; padding: [4, 8] }
+      Text {
+        text: "+"
+        color: olive
+        font: sans
+        fontSize: 24
+        align: center
+        padding: [12, 8]
+        onTap: {
+          if part == "hour" { draftHour = (draftHour + 1) % 24 }
+          else { draftMinute = (draftMinute + 1) % 60 }
+        }
+      }
+      Text { text: part == "hour" ? str(draftHour % 12 == 0 ? 12 : draftHour % 12) : pad(draftMinute, 2, "0"); font: sans; fontSize: 32; color: ink; align: center }
+      Text {
+        text: "−"
+        color: olive
+        font: sans
+        fontSize: 24
+        align: center
+        padding: [12, 8]
+        onTap: {
+          if part == "hour" { draftHour = (draftHour + 23) % 24 }
+          else { draftMinute = (draftMinute + 59) % 60 }
+        }
+      }
+    }
+  }
+
+  screen {
+    title: pickingReminder ? str.screenReminder : openTask == null ? str.screenNew : str.screenEdit
+    Column {
+      fill: true
+      background: paper
+      gap: 0
+      Column {
+        weight: 1
+        scroll: true
+        padding: [20, 16]
+        gap: 18
+        if !pickingReminder {
+        Text { text: openTask == null ? str.newTitle : str.editTitle; font: serif; fontSize: 28; color: ink }
+        Text { text: str.taskLabel; font: mono; fontSize: 10; letterSpacing: 1.5; color: soft }
+        Box {
+          background: wash
+          radius: 8
+          padding: [12, 8]
+          Input { text: draftText; placeholder: str.taskPlaceholder; color: ink; fontSize: 18; underline: false; onChange: { draftText = value; editorError = "" } }
+        }
+        Text { text: str.listLabel; font: mono; fontSize: 10; letterSpacing: 1.5; color: soft }
+        Flow {
+          gap: 8
+          for p, i in pages key i {
+            Text {
+              text: p.name
+              font: sans
+              fontSize: 14
+              color: destination == i ? paper : olive
+              background: destination == i ? olive : wash
+              padding: [14, 14]
+              radius: 6
+              onTap: destination = i
+            }
+          }
+        }
+        }
+        if pickingReminder {
+          Text { text: str.setReminder; font: serif; fontSize: 28; color: ink }
+          Text { text: draftText; font: sans; fontSize: 14; color: soft; maxLines: 2 }
+        }
+        if !(editing.done ?? false) {
+          if !pickingReminder {
+          Box { fill: width; height: 1; background: rule }
+          Text { text: str.reminderLabel; font: mono; fontSize: 10; letterSpacing: 1.5; color: soft }
+          Flow {
+            gap: 8
+            Text {
+              text: str.noReminder
+              color: !hasReminder ? paper : olive
+              background: !hasReminder ? olive : wash
+              font: sans
+              fontSize: 14
+              padding: [14, 14]
+              radius: 6
+              onTap: { hasReminder = false; draftRepeat = "once"; editorError = "" }
+            }
+            ReminderPreset { label: str.in15; delay: 900 }
+            ReminderPreset { label: str.inHour; delay: 3600 }
+            Text {
+              text: str.tomorrow9
+              font: sans
+              fontSize: 14
+              color: olive
+              background: wash
+              padding: [14, 14]
+              radius: 6
+              onTap: { hasReminder = true; draftDate = fmtTime(now + 86400, "yyyy-MM-dd"); draftHour = 9; draftMinute = 0; editorError = "" }
+            }
+            Text {
+              text: str.chooseDateTime
+              font: sans
+              fontSize: 14
+              color: olive
+              background: wash
+              padding: [14, 14]
+              radius: 6
+              onTap: {
+                if !hasReminder {
+                  let target = now + 3600
+                  draftDate = fmtTime(target, "yyyy-MM-dd")
+                  draftHour = num(fmtTime(target, "H"))
+                  draftMinute = num(fmtTime(target, "m"))
+                }
+                hasReminder = true
+                pickingReminder = true
+              }
+            }
+          }
+          if hasReminder {
+            Text { text: reminderError == "" ? "${fmtTime(draftAt, "EEE d MMM · h:mm a")} · ${draftRepeat}" : reminderError; color: reminderError == "" ? olive : red; font: sans; fontSize: 14 }
+          }
+          }
+          if hasReminder && pickingReminder {
+            Column {
+              gap: 16
+              padding: 14
+              border: 1
+              borderColor: rule
+              radius: 8
+              Text { text: str.chooseDay; color: ink; font: sans; fontSize: 16 }
+              Flow {
+                gap: 8
+                DayChoice { label: str.today; offset: 0 }
+                DayChoice { label: str.tomorrow; offset: 1 }
+                DayChoice { label: fmtTime(now + 172800, "EEE d"); offset: 2 }
+                Text { text: otherDate ? str.fewerDays : str.moreDates; color: olive; font: sans; fontSize: 13; padding: [6, 14]; onTap: otherDate = !otherDate }
+              }
+              if otherDate {
+              Flow {
+                gap: 8
+                for d in range(3, 7) {
+                  DayChoice { label: fmtTime(now + d * 86400, "EEE d"); offset: d }
+                }
+              }
+              Text { text: str.enterDate; color: soft; font: sans; fontSize: 12 }
+              Input { text: draftDate; placeholder: "YYYY-MM-DD"; color: ink; fontSize: 16; onChange: { draftDate = trim(value); editorError = "" } }
+              }
+              Text { text: str.chooseTime; color: ink; font: sans; fontSize: 16 }
+              Row {
+                gap: 10
+                align: center
+                TimePart { part: "hour" }
+                TimePart { part: "minute" }
+                Text {
+                  text: draftHour < 12 ? str.am : str.pm
+                  font: sans
+                  fontSize: 16
+                  color: paper
+                  background: olive
+                  radius: 6
+                  padding: [12, 18]
+                  onTap: draftHour = (draftHour + 12) % 24
+                }
+              }
+              Flow {
+                gap: 8
+                for m in [0, 15, 30, 45] {
+                  Text { text: ":${pad(m, 2, "0")}"; font: sans; fontSize: 14; padding: [12, 14]; radius: 6; background: draftMinute == m ? olive : wash; color: draftMinute == m ? paper : olive; onTap: draftMinute = m }
+                }
+              }
+              Text { text: str.repeatTitle; color: ink; font: sans; fontSize: 16 }
+              Flow {
+                gap: 8
+                RepeatChoice { label: str.once; choice: "once" }
+                RepeatChoice { label: str.daily; choice: "daily" }
+                RepeatChoice { label: str.weekly; choice: "weekly" }
+              }
+              if reminderError != "" {
+                Text { text: reminderError; font: sans; fontSize: 13; color: red }
+              } else {
+                Text { text: "${fmtTime(draftAt, "EEE d MMM, h:mm a")} · ${draftRepeat == "daily" ? str.daily : draftRepeat == "weekly" ? str.weekly : str.once}"; font: sans; fontSize: 14; color: olive }
+              }
+            }
+          }
+        } else {
+          Text { text: str.finishedHint; color: soft; font: sans; fontSize: 14 }
+        }
+        if editing != null && !pickingReminder {
+          Text { text: str.positionLabel; font: mono; fontSize: 10; color: soft }
+          Flow {
+            gap: 8
+            for pos in ["keep", "first", "last"] {
+              Text { text: pos == "keep" ? str.keepOrder : pos == "first" ? str.moveTop : str.moveBottom; font: sans; fontSize: 13; color: draftPosition == pos ? paper : olive; background: draftPosition == pos ? olive : wash; padding: [12, 14]; radius: 6; onTap: draftPosition = pos }
+            }
+          }
+          Box { fill: width; height: 1; background: rule }
+          Text {
+            text: confirmDelete ? str.deleteConfirm : str.deleteTask
+            color: red
+            font: sans
+            fontSize: 14
+            padding: [0, 14]
+            onTap: {
+              if confirmDelete {
+                let origin = pages[editorList]
+                let originalTasks = origin.tasks ?? []
+                let index = indexOf(originalTasks.map(t => t.id), openTask)
+                if index >= 0 {
+                  undo = { list: editorList, index: index, tasks: [editing], label: str.taskDeleted }
+                  pages = set(pages, editorList, merge(origin, { tasks: remove(originalTasks, index) }))
+                  current = editorList
+                  close()
+                }
+              } else { confirmDelete = true }
+            }
+          }
+        }
+      }
+      Column {
+        gap: 8
+        padding: [20, 12]
+        background: wash
+        if editorError != "" { Text { text: editorError; color: red; font: sans; fontSize: 13 } }
+        if hasReminder && reminderError == "" {
+          Text { text: str.reminderAt(fmtTime(draftAt, "EEE d MMM · h:mm a")); color: olive; font: sans; fontSize: 12 }
+        }
+        Row {
+          gap: 12
+          Text { text: pickingReminder ? str.back : str.cancelTitle; font: sans; fontSize: 16; color: soft; padding: [14, 16]; onTap: { if pickingReminder { pickingReminder = false } else { close() } } }
+          Text {
+            text: pickingReminder ? str.useReminder : openTask == null ? str.createTask : str.saveChanges
+            weight: 1
+            align: center
+            font: sans
+            fontSize: 16
+            color: paper
+            background: olive
+            radius: 8
+            padding: [14, 16]
+            onTap: {
+              if pickingReminder {
+                if reminderError != "" { editorError = reminderError }
+                else { pickingReminder = false; editorError = "" }
+              } else if trim(draftText) == "" {
+                editorError = str.needName
+              } else if reminderError != "" && !(editing.done ?? false) {
+                editorError = reminderError
+              } else if pages[editorList] == null || pages[destination] == null || (openTask != null && editing == null) {
+                editorError = str.changed
+              } else {
+                let taskId = openTask ?? random(1000000000)
+                let result = merge(editing ?? {}, { id: taskId, text: trim(draftText), done: editing.done ?? false, remindAt: (editing.done ?? false) ? editing.remindAt : draftAt, repeat: (editing.done ?? false) ? editing.repeat : hasReminder ? draftRepeat : "once", notifiedAt: draftAt == editing.remindAt ? editing.notifiedAt : null })
+                let origin = pages[editorList]
+                if destination == editorList {
+                  let updated = openTask == null ? [result] + (origin.tasks ?? []) : (origin.tasks ?? []).map(t => t.id == openTask ? result : t)
+                  let without = updated.filter(t => t.id != taskId)
+                  let ordered = draftPosition == "first" ? [result] + without : draftPosition == "last" ? without + [result] : updated
+                  pages = set(pages, editorList, merge(origin, { tasks: ordered }))
+                } else {
+                  pages = set(pages, editorList, merge(origin, { tasks: (origin.tasks ?? []).filter(t => t.id != openTask) }))
+                  let targetList = pages[destination]
+                  pages = set(pages, destination, merge(targetList, { tasks: draftPosition == "last" ? (targetList.tasks ?? []) + [result] : [result] + (targetList.tasks ?? []) }))
+                }
+                current = destination
+                if openTask == null { captureText = "" }
+                undo = null
+                haptic()
+                close()
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+}
