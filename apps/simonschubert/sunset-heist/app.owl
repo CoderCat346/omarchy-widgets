@@ -1,5 +1,5 @@
 app "sunset heist" {
-  meta { owl: 22; description: "A sunny city by the sea, seen from above: drive, get out, take any car, race rivals, chase down cars and run missions for cash, jump the ramps and shake off the police"; version: "1.0"; license: "MIT"; category: "games" }
+  meta { owl: 22; description: "A sunny city by the sea, seen from above: drive, get out, take any car, race rivals, chase down cars and run missions for cash, jump the ramps and shake off the police"; version: "1.1"; license: "MIT"; category: "games" }
   // How it works: the city is made from a seed in lets, 12 by 16 cells of 32 units, each a block with
   // roads along its edges, and a kind: docks on the north shore, a canal across the middle, hotels on the
   // beach, houses in the south, towers downtown and a few landmarks. Only the cells around the camera are drawn. Two scenes share one camera: the
@@ -74,7 +74,8 @@ app "sunset heist" {
   state camX = 112
   state camZ = 322.5
   state cars = []
-  // Parked vehicles, to get into: a few of each kind wait by the curb near the start, and again in a new game.
+  // Parked vehicles, to get into: a few of each kind wait by the curb near the start, and again in a new game. They
+  // stay there (ids below 0) however many cars you leave behind; only the last five of those are kept.
   let STARTERS = [{id: -1, t: 2, x: 106, z: 315.3, h: 90, c: 1, dmg: 0, wreck: false}, {id: -2, t: 6, x: 113.5, z: 315.6, h: 90, c: 2, dmg: 0, wreck: false}, {id: -3, t: 4, x: 121, z: 315.3, h: 90, c: 0, dmg: 0, wreck: false}, {id: -4, t: 3, x: 138, z: 315.3, h: 90, c: 3, dmg: 0, wreck: false}, {id: -5, t: 5, x: 148.5, z: 315.3, h: 90, c: 4, dmg: 0, wreck: false}, {id: -6, t: 0, x: 106, z: 324.8, h: 270, c: 7, dmg: 0, wreck: false}, {id: -7, t: 7, x: 114, z: 324.8, h: 270, c: 3, dmg: 0, wreck: false}, {id: -8, t: 8, x: 122, z: 324.8, h: 270, c: 1, dmg: 0, wreck: false}]
   state parked = STARTERS
   state peds = []
@@ -581,8 +582,9 @@ app "sunset heist" {
         }
       }
 
-      // A car left in a lane is shoved toward the curb by the traffic it's in the way of (traffic is only near the camera).
-      parked = parked.map(p => abs(p.x - camX) > 125 || abs(p.z - camZ) > 125 ? p : [first(cars.filter(c => dist([c.x, c.z], [p.x, p.z]) < TYPES[c.t ?? 1].r + TYPES[p.t ?? 1].r))].map(c => c == null ? p : merge(p, {x: p.x - round(cos(rad(c.h))) * 6 * dt, z: p.z + round(sin(rad(c.h))) * 6 * dt}))[0])
+      // A car left in a lane is shoved toward the curb by the traffic it's in the way of (traffic is only near the camera);
+      // one already at the curb, as the starters are, is left where it is, so they stay in a tidy row.
+      parked = parked.map(p => abs(p.x - camX) > 125 || abs(p.z - camZ) > 125 || min(abs(p.x - round(p.x / C) * C), abs(p.z - round(p.z / C) * C)) > 4 ? p : [first(cars.filter(c => dist([c.x, c.z], [p.x, p.z]) < TYPES[c.t ?? 1].r + TYPES[p.t ?? 1].r))].map(c => c == null ? p : merge(p, {x: p.x - round(cos(rad(c.h))) * 6 * dt, z: p.z + round(sin(rad(c.h))) * 6 * dt}))[0])
 
       // People on the sidewalks, now and then turning back; knocked over, they lie still, then get up and hurry on.
       peds = peds.map(p => p.down > 0 && ((p.gone ?? false) || gt - p.down < 3) ? p : merge(p, {x: p.x + round(sin(rad(p.h))) * p.v * dt, z: p.z + round(cos(rad(p.h))) * p.v * dt, h: random() < 0.002 || abs(p.z + round(cos(rad(p.h))) * 1.2 - (10 * C + 16)) < 9.5 ? (p.h + 180) % 360 : p.h}))
@@ -719,7 +721,7 @@ app "sunset heist" {
         }
         // Too much damage and the car is done for: you climb out of the wreck.
         if inCar && dmg >= 100 {
-          parked = drop(parked, max(0, len(parked) - 5)) + [{id: nextId, t: ptype, x: px, z: pz, h: ph, c: pcol, dmg: dmg, wreck: true}]
+          parked = parked.filter(c => c.id < 0) + [parked.filter(c => c.id >= 0)].map(q => drop(q, max(0, len(q) - 5)))[0] + [{id: nextId, t: ptype, x: px, z: pz, h: ph, c: pcol, dmg: dmg, wreck: true}]
           nextId = nextId + 1
           inCar = false
           pv = 0
@@ -793,7 +795,7 @@ app "sunset heist" {
             cops = cops.map(c => c.id == tgt.id ? merge(c, {hp: (c.hp ?? 80) - w.dmg}) : c).filter(c => (c.hp ?? 1) > 0)
             if wreck != null {
               blasts = blasts + [{x: wreck.x, z: wreck.z}]
-              parked = drop(parked, max(0, len(parked) - 5)) + [{id: nextId, t: 1, x: wreck.x, z: wreck.z, h: wreck.h, c: 0, dmg: 100, wreck: true}]
+              parked = parked.filter(c => c.id < 0) + [parked.filter(c => c.id >= 0)].map(q => drop(q, max(0, len(q) - 5)))[0] + [{id: nextId, t: 1, x: wreck.x, z: wreck.z, h: wreck.h, c: 0, dmg: 100, wreck: true}]
               nextId = nextId + 1
             }
             heat = min(5, max(2, heat + (gt - crimeAt > 2 ? 1 : 0)))
@@ -804,7 +806,7 @@ app "sunset heist" {
             cars = cars.map(c => c.id == tgt.id ? merge(c, {hp: (c.hp ?? 60) - w.dmg, v: 0}) : c).filter(c => (c.hp ?? 1) > 0)
             if wreck != null {
               blasts = blasts + [{x: wreck.x, z: wreck.z}]
-              parked = drop(parked, max(0, len(parked) - 5)) + [{id: nextId, t: wreck.t ?? 1, x: wreck.x, z: wreck.z, h: wreck.h, c: wreck.c, dmg: 100, wreck: true}]
+              parked = parked.filter(c => c.id < 0) + [parked.filter(c => c.id >= 0)].map(q => drop(q, max(0, len(q) - 5)))[0] + [{id: nextId, t: wreck.t ?? 1, x: wreck.x, z: wreck.z, h: wreck.h, c: wreck.c, dmg: 100, wreck: true}]
               nextId = nextId + 1
               heat = min(5, heat + (gt - crimeAt > 1 ? 1 : 0))
               crimeAt = gt
@@ -955,7 +957,7 @@ app "sunset heist" {
             fx = drop(fx, max(0, len(fx) - 30)) + range(8).map(i => {k: "spark", x: (px + prey.x) / 2, y: 0.8, z: (pz + prey.z) / 2, vx: random() * 16 - 8, vy: random() * 8, vz: random() * 16 - 8, life: 0.4 + random() * 0.3})
             if hpLeft <= 0 {
               blasts = blasts + [{x: prey.x, z: prey.z}]
-              parked = drop(parked, max(0, len(parked) - 5)) + [{id: nextId, t: 2, x: prey.x, z: prey.z, h: prey.vh, c: 1, dmg: 100, wreck: true}]
+              parked = parked.filter(c => c.id < 0) + [parked.filter(c => c.id >= 0)].map(q => drop(q, max(0, len(q) - 5)))[0] + [{id: nextId, t: 2, x: prey.x, z: prey.z, h: prey.vh, c: 1, dmg: 100, wreck: true}]
               nextId = nextId + 1
               cash = cash + 350
               msg = "target down · +$350"
@@ -1760,7 +1762,7 @@ app "sunset heist" {
         padding: [0, 0, 16, BOT + (inCar ? 96 : 28)]
         if inCar && abs(pv) < 4 && air == null {
           Text { text: "GET OUT"; width: 150; align: center; padding: [16, 10]; font: ANTON; fontSize: 20; background: alpha(black, 0.65); border: black; color: white; onTap: {
-            parked = drop(parked, max(0, len(parked) - 5)) + [{id: nextId, t: ptype, x: px, z: pz, h: ph, c: pcol, dmg: dmg, wreck: false}]
+            parked = parked.filter(c => c.id < 0) + [parked.filter(c => c.id >= 0)].map(q => drop(q, max(0, len(q) - 5)))[0] + [{id: nextId, t: ptype, x: px, z: pz, h: ph, c: pcol, dmg: dmg, wreck: false}]
             nextId = nextId + 1
             inCar = false
             pv = 0
@@ -1898,7 +1900,7 @@ app "sunset heist" {
                   let opts = DROPS.filter(p => dist(p, [px, pz]) > 220)
                   let d = opts[random(len(opts))]
                   if inCar {
-                    parked = drop(parked, max(0, len(parked) - 5)) + [{id: nextId, t: ptype, x: px - 3, z: pz + 3, h: ph, c: pcol, dmg: dmg, wreck: false}]
+                    parked = parked.filter(c => c.id < 0) + [parked.filter(c => c.id >= 0)].map(q => drop(q, max(0, len(q) - 5)))[0] + [{id: nextId, t: ptype, x: px - 3, z: pz + 3, h: ph, c: pcol, dmg: dmg, wreck: false}]
                     nextId = nextId + 1
                   }
                   inCar = true
