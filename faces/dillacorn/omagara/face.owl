@@ -1,5 +1,5 @@
 face "Omagara" {
-  meta { owl: 21; description: "Niagara-inspired transparent home face with elastic alphabetical navigation, app search, notifications, calendar, timers and world clocks"; version: "1.2"; license: "MIT"; category: "home" }
+  meta { owl: 21; description: "Niagara-inspired transparent home face with elastic alphabetical navigation, app search, notifications, calendar, timers and world clocks"; version: "1.3"; license: "MIT"; category: "home" }
   fps: 60
   page: 0
   edge: true
@@ -29,8 +29,18 @@ face "Omagara" {
   // The letters follow a vertical edge pull; the stationary rail retains input.
   state railOverpull = 0
   state railReturnFrom = 0
+  state railReturnPull = 0
+  state railReturnScale = 0
   state railReturnStart = 0
   state railReturning = false
+  // Optional gesture-only ripple. No persistent state, timers or polling.
+  state railFlickStartY = 0
+  state railFlickLastY = 0
+  state railFlickStarted = 0
+  state railWiggling = false
+  state railWiggleStarted = 0
+  state railWiggleOrigin = 0
+  state railWiggleDirection = 0
   // Brief mountain entrance, then full-speed thumb tracking.
   state railEnterStart = 0
   state railEntering = false
@@ -44,10 +54,26 @@ face "Omagara" {
   // Screen-space dp, updated only by stationary rail touch handlers.
   state touchY = 0
   state expandedStack = ""
+  state expandedNoticeActions = ""
   state replyKey = ""
   state replyDraft = ""
   state noticeDragKey = ""
   state noticeDragX = 0
+  // One single-notification pulse; a stack schedules a second distinct tap.
+  state noticeSwipeHapticFired = false
+  state noticeExitKey = ""
+  state noticeExitX = 0
+  // Capture where the notification physically is at finger release.
+  state noticeExitFromX = 0
+  state noticeReturnKey = ""
+  state noticeReturnFromX = 0
+  state noticeReturnStarted = 0
+  state noticeExitStarted = 0
+  state noticeExitKeys = []
+  state noticeExitSent = false
+  state stackSecondHapticAt = 0
+  // Snapshot of clearable keys in a selected app/profile stack.
+  state pendingStackDismiss = []
 
   state prefs = {} persist
   state worldZones = [] persist
@@ -67,19 +93,25 @@ face "Omagara" {
   state timerLeft = 0 persist
   state watchStarted = 0
   state watchElapsed = 0
-  let defaults = {idleAlphabet: true, hideEmpty: true, icons: true, iconStyle: "Theme overlay", iconOverlayOpacity: 30, faceFont: "Sans", clock: true, date: true, event: true, notifications: true, previews: true, curve: true, reduceMotion: false, leftInput: true, grouping: true, actions: true, clockTap: true, dateTap: true, eventTap: true, searchContacts: false, calculator: true, appScale: 80, hapticFeedback: "Every letter", bubbleShape: "Square", bubbleBorder: false, textTone: "Theme", textContrast: "High"}
+  let defaults = {idleAlphabet: true, hideEmpty: true, icons: true, iconStyle: "Theme overlay", iconOverlayOpacity: 30, faceFont: "Sans", clock: true, date: true, event: true, notifications: true, previews: true, curve: true, reduceMotion: false, leftInput: true, grouping: true, actions: true, clockTap: true, dateTap: true, eventTap: true, searchContacts: false, calculator: true, appScale: 80, hapticFeedback: "Every letter", roundTime: false, roundDate: false, roundEvent: false, roundAlphabet: false, roundNotifications: false, roundNoticeHeading: false, roundClearAll: false, roundSearch: false, roundClose: false, roundLetterCue: false, roundCalendar: false, bubbleBorder: false, textTone: "Theme", textContrast: "High", shadeHeader: true, shadeAlphabet: true, shadeNoticeLabels: true, shadeAppLabels: true, roundAppLabels: false, centerNotificationsWithoutAlphabet: true, alphabetSide: "Right"}
   let appScaleChoices = [75, 80, 85, 90, 95, 100, 105, 110, 115]
   let hapticChoices = ["Off", "Reduced", "Every letter"]
-  let bubbleShapeChoices = ["Square", "Rounded"]
   let iconStyleChoices = ["Colored", "Theme overlay"]
   let iconOverlayChoices = [0, 10, 20, 30, 40, 50, 60]
   let faceFontChoices = ["Sans", "Serif", "Launcher"]
   let textToneChoices = ["Theme", "Light", "Dark"]
   let textContrastChoices = ["High", "Standard"]
-  let cfg = merge(defaults, prefs, {searchContacts: false, appScale: contains(appScaleChoices, prefs.appScale) ? prefs.appScale : 80, hapticFeedback: contains(hapticChoices, prefs.hapticFeedback) ? prefs.hapticFeedback : "Every letter", bubbleShape: contains(bubbleShapeChoices, prefs.bubbleShape) ? prefs.bubbleShape : "Square", bubbleBorder: prefs.bubbleBorder == true, iconStyle: contains(iconStyleChoices, prefs.iconStyle) ? prefs.iconStyle : "Theme overlay", iconOverlayOpacity: contains(iconOverlayChoices, prefs.iconOverlayOpacity) ? prefs.iconOverlayOpacity : 30, faceFont: contains(faceFontChoices, prefs.faceFont) ? prefs.faceFont : "Sans", textTone: contains(textToneChoices, prefs.textTone) ? prefs.textTone : "Theme", textContrast: contains(textContrastChoices, prefs.textContrast) ? prefs.textContrast : "High"})
+  let cfg = merge(defaults, prefs, {alphabetSide: contains(["Left", "Right"], prefs.alphabetSide) ? prefs.alphabetSide : "Right", searchContacts: false, appScale: contains(appScaleChoices, prefs.appScale) ? prefs.appScale : 80, hapticFeedback: contains(hapticChoices, prefs.hapticFeedback) ? prefs.hapticFeedback : "Every letter", bubbleBorder: prefs.bubbleBorder == true, iconStyle: contains(iconStyleChoices, prefs.iconStyle) ? prefs.iconStyle : "Theme overlay", iconOverlayOpacity: contains(iconOverlayChoices, prefs.iconOverlayOpacity) ? prefs.iconOverlayOpacity : 30, faceFont: contains(faceFontChoices, prefs.faceFont) ? prefs.faceFont : "Sans", textTone: contains(textToneChoices, prefs.textTone) ? prefs.textTone : "Theme", textContrast: contains(textContrastChoices, prefs.textContrast) ? prefs.textContrast : "High"})
   // OWL cannot sample wallpaper brightness; explicit overrides keep text legible.
   let primaryText = cfg.textTone == "Light" ? #FAFAFA : cfg.textTone == "Dark" ? #101010 : foreground
   let secondaryText = cfg.textContrast == "High" ? primaryText : cfg.textTone == "Light" ? #CECECE : cfg.textTone == "Dark" ? #474747 : muted
+  // Theme-aware scrim to keep header and index legible over detailed wallpapers.
+  // Forced light/dark text receives its opposite backing color.
+  let legibilityShade = cfg.textTone == "Light" ? alpha(#111111, 0.49) : cfg.textTone == "Dark" ? alpha(#FFFFFF, 0.49) : alpha(mix(background, surface, 0.50), 0.49)
+  // Slightly stronger, compact scrim for app names and section headings.
+  let appLabelShade = cfg.textTone == "Light" ? alpha(#111111, 0.60) : cfg.textTone == "Dark" ? alpha(#FFFFFF, 0.60) : alpha(mix(background, surface, 0.50), 0.60)
+  let alphabetSide = cfg.alphabetSide == "Left" ? -1 : 1
+  let noticePanelShift = cfg.centerNotificationsWithoutAlphabet && !cfg.idleAlphabet ? 0 : alphabetSide == -1 ? 20 : -20
   let chosenFont = cfg.faceFont == "Serif" ? "serif" : cfg.faceFont == "Launcher" ? "mono" : "sans"
   let zoneChoices = ["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Toronto", "America/Sao_Paulo", "Europe/London", "Europe/Paris", "Europe/Berlin", "Asia/Dubai", "Asia/Kolkata", "Asia/Singapore", "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland"]
   let preferenceRows = [
@@ -87,9 +119,26 @@ face "Omagara" {
     {key: "clock", name: "Show clock"}, {key: "date", name: "Show date"},
     {key: "event", name: "Show today's calendar event"},
     {key: "reduceMotion", name: "Reduce motion"},
+    {key: "shadeHeader", name: "Shade clock, date and event"},
+    {key: "shadeAlphabet", name: "Shade alphabet worm"},
+    {key: "shadeNoticeLabels", name: "Shade notification headings"},
+    {key: "shadeAppLabels", name: "Shade application labels"},
+    {section: "Corner rounding", key: "roundTime", name: "Round clock shade"},
+    {key: "roundDate", name: "Round date shade"},
+    {key: "roundEvent", name: "Round event shade"},
+    {key: "roundAlphabet", name: "Round alphabet worm ends"},
+    {key: "roundNotifications", name: "Round notification cards"},
+    {key: "roundNoticeHeading", name: "Round Notifications heading"},
+    {key: "roundClearAll", name: "Round Clear all heading"},
+    {key: "roundSearch", name: "Round Search button"},
+    {key: "roundClose", name: "Round browser Close button"},
+    {key: "roundLetterCue", name: "Round selected-letter cue"},
+    {key: "roundCalendar", name: "Round calendar event cards"},
+    {key: "roundAppLabels", name: "Round application label shades"},
     {section: "Navigation", key: "idleAlphabet", name: "Show alphabet while idle"},
     {key: "hideEmpty", name: "Hide empty alphabet letters"},
-    {key: "leftInput", name: "Enable left-edge input"},
+    {key: "leftInput", name: "Enable opposite-edge input"},
+    {key: "centerNotificationsWithoutAlphabet", name: "Center notifications when alphabet is hidden"},
     {key: "curve", name: "Curved alphabet animation"},
     {section: "Notifications", key: "notifications", name: "Show notifications"},
     {key: "previews", name: "Show notification content previews"},
@@ -111,30 +160,50 @@ face "Omagara" {
   let groups = groupBy(apps, a => contains(fullAlphabet, upper(sub(trim(a.name), 0, 1))) ? upper(sub(trim(a.name), 0, 1)) : "#")
   // Freeze mapping and geometry for the entire touch, even if apps update.
   let liveAlphabet = cfg.hideEmpty ? fullAlphabet.filter(c => len(get(groups, c, [])) > 0) : fullAlphabet
-  let alphabet = railHeld ? heldAlphabet : liveAlphabet
-  let searchResults = trim(queryText) == "" ? apps : rank(apps, trim(queryText))
+  // Freeze letters through the return, so changing available apps cannot reshape the worm mid-snap.
+  let alphabet = railHeld || railReturning || railWiggling ? heldAlphabet : liveAlphabet
+  // Put the single most recently opened Android app first only when Search is empty.
+  // android.apps.last is launcher-maintained history; no new permission needed.
+  let lastOpenedApp = first(apps.filter(a => a.last != null).sortBy(a => -(a.last ?? 0)))
+  let searchResults = trim(queryText) == "" ? (lastOpenedApp == null ? apps : [lastOpenedApp] + apps.filter(a => a.key != lastOpenedApp.key)) : rank(apps, trim(queryText))
   let availableHeight = (tileHeight ?? 800) - screenTop - screenInset
   let compact = availableHeight < 560
   let availableWidth = (tileWidth ?? 400) - screenLeft - screenRight
   // The 44dp right rail is inset by screenRight + 4dp; glyphs are centered
   // 22dp inside it. Keep the glyph fully inside the opposite safe edge.
   let railBaseX = (tileWidth ?? 400) - screenRight - 26
-  let railMaxReach = max(0, railBaseX - screenLeft - 14)
+  let railHomeX = alphabetSide == -1 ? screenLeft + 26 : railBaseX
+  let railMaxReach = alphabetSide == -1 ? max(0, (tileWidth ?? 400) - screenRight - railHomeX - 14) : max(0, railHomeX - screenLeft - 14)
   // First/last letter centers sit at 31%/90% of the inset-safe height.
   // Include half a cell above/below them so both endpoint hit regions are full-sized.
   let railStep = availableHeight * 0.59 / max(1, len(alphabet) - 1)
   let railHeight = railStep * max(1, len(alphabet))
   let railTop = screenTop + availableHeight * 0.31 - (len(alphabet) > 1 ? railStep / 2 : 0)
-  // Only read the frame clock during a 160ms entrance or a 420ms return.
+  // While held, let the first/last glyph reach the usable screen edge.
+  // The fixed touch rail does not move; only its displayed letters do.
+  let railUpperReach = max(0, railTop + railStep / 2 - screenTop - 10)
+  let railLowerReach = max(0, (tileHeight ?? 800) - screenInset - 10 - (railTop + railHeight - railStep / 2))
+  // Animate only the 160ms curve entrance and 110ms release return.
   let railEnterAge = railEntering ? max(0, time - railEnterStart) : 0
   let railEnterT = railEntering ? clamp(railEnterAge / 0.16, 0, 1) : 1
   let railEnterEase = 1 - pow(1 - railEnterT, 3)
   let railEnterDone = railEntering && railEnterAge >= 0.16
   on railEnterDone { if value { railEntering = false } }
   let railReturnAge = railReturning ? max(0, time - railReturnStart) : 0
-  let railVisualY = railHeld ? railOverpull : railReturning && !cfg.reduceMotion ? railReturnFrom * pow(2.718281828459045, -12 * railReturnAge) * cos(20 * railReturnAge) : 0
-  let railReturnDone = railReturning && railReturnAge >= 0.42
-  on railReturnDone { if value { railReturning = false; railReturnFrom = 0 } }
+  // Keep the approved 110ms release animation regardless of flick direction.
+  let railReturnT = clamp(railReturnAge / 0.11, 0, 1)
+  let railReturnEase = pow(1 - railReturnT, 3)
+  // Directional travel starts at the touched letter: up goes toward A,
+  // down goes toward Z. A new alphabet gesture cancels the whole effect.
+  let railWiggleAge = railWiggling ? max(0, time - railWiggleStarted) : 0
+  let railWiggleDone = railWiggling && railWiggleAge >= 1.70
+  on railWiggleDone { if value { railWiggling = false } }
+  // Share deformation between the glyphs and the single Canvas ribbon.
+  let railCurveStrength = !cfg.curve ? 0 : activeSide != 0 ? railEnterEase : railReturning && !cfg.reduceMotion ? railReturnScale * railReturnEase : 0
+  let railCurvePull = activeSide != 0 ? railPull : railReturning && !cfg.reduceMotion ? railReturnPull : 0
+  let railVisualY = railHeld ? railOverpull : railReturning && !cfg.reduceMotion ? railReturnFrom * railReturnEase : 0
+  let railReturnDone = railReturning && railReturnAge >= 0.11
+  on railReturnDone { if value { railReturning = false; railReturnFrom = 0; railReturnPull = 0; railReturnScale = 0 } }
   // Handlers receive y local to this same rail: each center is (i + 0.5)
   // * railStep. floor(y / railStep) selects i; no screen offset is subtracted.
 
@@ -264,25 +333,144 @@ face "Omagara" {
       replyKey = ""
       replyDraft = ""
     }
-    if !any(noticeItems, n => n.key == noticeDragKey) { noticeDragKey = ""; noticeDragX = 0 }
+    if expandedNoticeActions != "" && !any(noticeItems, n => n.key == expandedNoticeActions) { expandedNoticeActions = "" }
+    if !any(noticeItems, n => n.key == noticeDragKey) && !any(noticeGroupKeys, k => "stack-drag:" + k == noticeDragKey) { noticeDragKey = ""; noticeDragX = 0; noticeSwipeHapticFired = false }
+    if noticeExitKey != "" && noticeExitSent && !any(noticeItems, n => contains(noticeExitKeys, n.key)) {
+      noticeExitKey = ""; noticeExitX = 0; noticeExitKeys = []; noticeExitSent = false
+    }
+  }
+
+  // The second stack tap runs after a short gap, not in the same handler.
+  // `time` is only observed while a pulse is pending; no idle polling.
+  when stackSecondHapticAt > 0 && time >= stackSecondHapticAt {
+    stackSecondHapticAt = 0
+    if cfg.hapticFeedback != "Off" { haptic() }
+  }
+
+  // A committed swipe continues off the card's current position.
+  // Native dismissal happens only after the outward animation completes.
+  // Animate the actual position, NOT an animated offset property. The
+  // latter could restart/spring toward zero when the drag ended.
+  // Both formulas are monotone: committed swipes always travel outward.
+  let noticeExitAge = noticeExitKey != "" ? max(0, time - noticeExitStarted) : 0
+  // Only a released, committed swipe starts the outbound animation.
+  // Its first frame matches the card's position at finger-up.
+  let noticeExitT = cfg.reduceMotion ? 1 : clamp(noticeExitAge / 0.24, 0, 1)
+  let noticeExitEase = 1 - pow(1 - noticeExitT, 3)
+  let noticeExitPosition = noticeExitFromX + (noticeExitX - noticeExitFromX) * noticeExitEase
+  let noticeReturnAge = noticeReturnKey != "" ? max(0, time - noticeReturnStarted) : 0
+  let noticeReturnT = cfg.reduceMotion ? 1 : clamp(noticeReturnAge / 0.24, 0, 1)
+  let noticeReturnPosition = noticeReturnFromX * pow(1 - noticeReturnT, 3)
+  let noticeReturnDone = noticeReturnKey != "" && noticeReturnT >= 1
+  on noticeReturnDone { if value { noticeReturnKey = ""; noticeReturnFromX = 0 } }
+  // Give the outbound slide time to finish before native removal.
+  let noticeExitDue = noticeExitKey != "" && !noticeExitSent && (cfg.reduceMotion || time - noticeExitStarted >= 0.32)
+  on noticeExitDue { if value { noticeExitSent = true; pendingStackDismiss = noticeExitKeys } }
+  let noticeExitExpired = noticeExitKey != "" && noticeExitSent && time - noticeExitStarted >= 2.0
+  on noticeExitExpired {
+    if value {
+      noticeDragKey = ""; noticeDragX = 0; noticeSwipeHapticFired = false
+      noticeExitKey = ""; noticeExitX = 0; noticeExitKeys = []; noticeExitSent = false
+    }
+  }
+
+  // OWL 21 handler statements have no for-loop. The native notifications
+  // source exposes at most 50 items; one batch can cover every visible key.
+  // Never call notification("clear"): it would affect unrelated apps.
+  on pendingStackDismiss {
+    if len(value) > 0 {
+      // Forget the request first so a later touch cannot replay old keys.
+      pendingStackDismiss = []
+      if len(value) > 0 { notification("dismiss", value[0]) }
+      if len(value) > 1 { notification("dismiss", value[1]) }
+      if len(value) > 2 { notification("dismiss", value[2]) }
+      if len(value) > 3 { notification("dismiss", value[3]) }
+      if len(value) > 4 { notification("dismiss", value[4]) }
+      if len(value) > 5 { notification("dismiss", value[5]) }
+      if len(value) > 6 { notification("dismiss", value[6]) }
+      if len(value) > 7 { notification("dismiss", value[7]) }
+      if len(value) > 8 { notification("dismiss", value[8]) }
+      if len(value) > 9 { notification("dismiss", value[9]) }
+      if len(value) > 10 { notification("dismiss", value[10]) }
+      if len(value) > 11 { notification("dismiss", value[11]) }
+      if len(value) > 12 { notification("dismiss", value[12]) }
+      if len(value) > 13 { notification("dismiss", value[13]) }
+      if len(value) > 14 { notification("dismiss", value[14]) }
+      if len(value) > 15 { notification("dismiss", value[15]) }
+      if len(value) > 16 { notification("dismiss", value[16]) }
+      if len(value) > 17 { notification("dismiss", value[17]) }
+      if len(value) > 18 { notification("dismiss", value[18]) }
+      if len(value) > 19 { notification("dismiss", value[19]) }
+      if len(value) > 20 { notification("dismiss", value[20]) }
+      if len(value) > 21 { notification("dismiss", value[21]) }
+      if len(value) > 22 { notification("dismiss", value[22]) }
+      if len(value) > 23 { notification("dismiss", value[23]) }
+      if len(value) > 24 { notification("dismiss", value[24]) }
+      if len(value) > 25 { notification("dismiss", value[25]) }
+      if len(value) > 26 { notification("dismiss", value[26]) }
+      if len(value) > 27 { notification("dismiss", value[27]) }
+      if len(value) > 28 { notification("dismiss", value[28]) }
+      if len(value) > 29 { notification("dismiss", value[29]) }
+      if len(value) > 30 { notification("dismiss", value[30]) }
+      if len(value) > 31 { notification("dismiss", value[31]) }
+      if len(value) > 32 { notification("dismiss", value[32]) }
+      if len(value) > 33 { notification("dismiss", value[33]) }
+      if len(value) > 34 { notification("dismiss", value[34]) }
+      if len(value) > 35 { notification("dismiss", value[35]) }
+      if len(value) > 36 { notification("dismiss", value[36]) }
+      if len(value) > 37 { notification("dismiss", value[37]) }
+      if len(value) > 38 { notification("dismiss", value[38]) }
+      if len(value) > 39 { notification("dismiss", value[39]) }
+      if len(value) > 40 { notification("dismiss", value[40]) }
+      if len(value) > 41 { notification("dismiss", value[41]) }
+      if len(value) > 42 { notification("dismiss", value[42]) }
+      if len(value) > 43 { notification("dismiss", value[43]) }
+      if len(value) > 44 { notification("dismiss", value[44]) }
+      if len(value) > 45 { notification("dismiss", value[45]) }
+      if len(value) > 46 { notification("dismiss", value[46]) }
+      if len(value) > 47 { notification("dismiss", value[47]) }
+      if len(value) > 48 { notification("dismiss", value[48]) }
+      if len(value) > 49 { notification("dismiss", value[49]) }
+    }
   }
 
   component NotificationRow(item, stack, summary) {
+    let groupItems = get(noticeGroups, stack, [])
+    let stacked = summary && len(groupItems) > 1
+    let groupClearables = groupItems.filter(n => n.clearable)
+    let canDismiss = stacked ? len(groupClearables) > 0 : item.clearable
+    // The summary and its first expanded child share item.key, but not a drag ID.
+    let dragId = stacked ? "stack-drag:" + stack : item.key
+    // Singles have a small catch; whole stacks resist more strongly.
+    // Crossing the threshold gives a bounded 12dp outward snap, not a dismissal.
+    // Crossing back inward re-engages resistance; only finger-up can dismiss.
+    let singleThreshold = max(1, min(noticeWidth * 0.65, max(30, noticeWidth * 0.26)))
+    let stackThreshold = max(1, min(noticeWidth * 0.75, max(48, noticeWidth * 0.38)))
+    let dismissThreshold = stacked ? stackThreshold : singleThreshold
+    let draggingHere = canDismiss && noticeDragKey == dragId
+    let exitingHere = noticeExitKey == dragId
+    let swipeDistance = abs(noticeDragX)
+    // Both branches share the same resistant baseline. No zero reset at haptic.
+    let magneticX = sign(noticeDragX) * min(noticeWidth, min(swipeDistance, dismissThreshold) * (stacked ? 0.54 : 0.32) + max(0, swipeDistance - dismissThreshold) * (stacked ? 1.65 : 1.30) + (swipeDistance >= dismissThreshold ? 12 : 0))
+    let swipeArmed = draggingHere && swipeDistance >= dismissThreshold
+    let stackArmed = stacked && swipeArmed
     Column {
       fill: width
-      gap: 5
-      padding: [16, 10]
-      radius: cfg.bubbleShape == "Rounded" ? 14 : 0
-      border: cfg.bubbleBorder ? 1 : 0
-      borderColor: border
+      gap: 4
+      padding: [14, 8]
+      radius: cfg.roundNotifications ? 14 : 0
+      border: stackArmed ? 1 : cfg.bubbleBorder ? 1 : 0
+      borderColor: stackArmed ? accent : border
       background: alpha(background, 0.48)
       onTap: {
         if summary && len(get(noticeGroups, stack, [])) > 1 {
           expandedStack = expandedStack == stack ? "" : stack
+          expandedNoticeActions = ""
           replyKey = ""
           replyDraft = ""
         } else {
           let notificationKey = item.key
+          expandedNoticeActions = ""
           queryText = ""
           appVelocity = 0; browsing = false
           activeSide = 0
@@ -295,30 +483,87 @@ face "Omagara" {
       // Horizontal consumption leaves the enclosing lazy Column free to scroll.
       // Clip at the notification viewport, clear of both Android screen edges.
       drag: horizontal
-      offset: [noticeDragKey == item.key && (!summary || len(get(noticeGroups, stack, [])) == 1) ? noticeDragX : 0, 0]
-      animate offset: cfg.reduceMotion ? tween(0ms) : spring(0.8, 400)
+      // Direct position while swiping; time-based continuation after
+      // release. No native offset spring to reverse the card direction.
+      offset: [exitingHere ? noticeExitPosition : draggingHere ? magneticX : noticeReturnKey == dragId ? noticeReturnPosition : 0, 0]
       onDrag: {
-        if item.clearable && (!summary || len(get(noticeGroups, stack, [])) == 1) {
-          if noticeDragKey != item.key { noticeDragX = 0 }
-          noticeDragKey = item.key
+        if canDismiss && noticeExitKey == "" {
+          if noticeReturnKey != "" { noticeReturnKey = ""; noticeReturnFromX = 0 }
+          if noticeDragKey != dragId { noticeDragX = 0; noticeSwipeHapticFired = false }
+          noticeDragKey = dragId
           noticeDragX = clamp(noticeDragX + dx, -noticeWidth, noticeWidth)
+          // Latch once; do not buzz again when the finger oscillates.
+          if !noticeSwipeHapticFired && abs(noticeDragX) >= dismissThreshold {
+            noticeSwipeHapticFired = true
+            // Haptic feedback only; keep tracking the finger and allow reversal.
+            if cfg.hapticFeedback != "Off" {
+              haptic()
+              if stacked { stackSecondHapticAt = time + 0.12 }
+            }
+          }
         }
       }
       onDragEnd: {
-        if noticeDragKey == item.key && item.clearable && (abs(noticeDragX) > noticeWidth / 3 || abs(noticeDragX) > 16 && abs(vx) > 1000 && sign(vx) == sign(noticeDragX)) {
-          notification("dismiss", item.key)
+        // No velocity-only dismissal of a stack; its whole group needs a
+        // deliberate threshold crossing. Preserve quick flicks for singles.
+        let committed = noticeDragKey == dragId && canDismiss && (abs(noticeDragX) >= dismissThreshold || !stacked && abs(noticeDragX) > 16 && abs(vx) > 1000 && sign(vx) == sign(noticeDragX))
+        if committed && noticeExitKey == "" {
+          // Start at the displayed magnetic drag position.
+          noticeExitFromX = magneticX
+          noticeExitX = sign(noticeDragX) * (noticeWidth + 64)
+          noticeExitStarted = time
+          noticeExitSent = false
+          noticeExitKey = dragId
+          // Singles get one release tap only if the fast flick bypassed breakaway.
+          // Stacks already got their two timed taps at the threshold.
+          if cfg.hapticFeedback != "Off" && !noticeSwipeHapticFired {
+            haptic()
+            if stacked { stackSecondHapticAt = time + 0.12 }
+          }
+          if stacked {
+            noticeExitKeys = groupClearables.map(n => n.key)
+          } else {
+            noticeExitKeys = [item.key]
+          }
         }
-        noticeDragKey = ""
-        noticeDragX = 0
+        // An incomplete swipe eases back. Committed swipes keep their
+        // existing position and move only farther away from the origin.
+        if !committed && noticeExitKey == "" {
+          noticeReturnKey = dragId
+          noticeReturnFromX = magneticX
+          noticeReturnStarted = time
+          noticeDragKey = ""
+          noticeDragX = 0
+          noticeSwipeHapticFired = false
+        }
       }
+      // A stack's arrow reveals its member notifications. A single card's
+      // arrow reveals its actions; neither button dismisses a notification.
       Row {
         fill: width
-        gap: 14
+        gap: 12
         align: center
         Image { src: item.icon; size: 32; label: (item.app ?? "Notification") + (item.profile == null ? "" : " · " + item.profile) }
         Text { text: (item.app ?? item.package) + (item.profile == null ? "" : " · " + item.profile); weight: 1; font: chosenFont; fontSize: 12; color: secondaryText; maxLines: 1 }
-        if item.clearable && (!summary || len(get(noticeGroups, stack, [])) == 1) {
-          Text { text: "×"; width: 44; height: 44; padding: [0, 10]; align: center; fontSize: 18; color: primaryText; onTap: notification("dismiss", item.key) }
+        if stacked || cfg.actions && cfg.previews && len(item.actions ?? []) > 0 {
+          Text {
+            text: stacked ? (expandedStack == stack ? "▴" : "▾") : expandedNoticeActions == dragId ? "▴" : "▾"
+            width: 44
+            height: 44
+            align: center
+            fontSize: 22
+            color: primaryText
+            onTap: {
+              if stacked {
+                expandedStack = expandedStack == stack ? "" : stack
+                expandedNoticeActions = ""
+              } else {
+                expandedNoticeActions = expandedNoticeActions == dragId ? "" : dragId
+              }
+              replyKey = ""
+              replyDraft = ""
+            }
+          }
         }
       }
       if !summary || expandedStack != stack || len(get(noticeGroups, stack, [])) == 1 {
@@ -326,9 +571,16 @@ face "Omagara" {
         if cfg.previews && (item.text ?? "") != "" { Text { text: item.text; font: chosenFont; fontSize: 14; color: secondaryText; maxLines: 3 } }
       }
       if summary && len(get(noticeGroups, stack, [])) > 1 {
-        Text { text: expandedStack == stack ? "${len(get(noticeGroups, stack, []))} notifications · collapse ▴" : "${len(get(noticeGroups, stack, []))} notifications · expand ▾"; font: chosenFont; fontSize: 13; color: accent; maxLines: 1; padding: [0, 5] }
+        Text {
+          text: stackArmed ? "Release to dismiss ${len(groupClearables)} notifications" : draggingHere ? "Swipe farther to dismiss ${len(groupClearables)} notifications" : "${len(groupItems)} notifications"
+          font: chosenFont
+          fontSize: 13
+          color: accent
+          maxLines: 1
+          padding: [0, 5]
+        }
       }
-      if cfg.previews && cfg.actions && (!summary || len(get(noticeGroups, stack, [])) == 1) && len(item.actions ?? []) > 0 {
+      if cfg.previews && cfg.actions && !stacked && expandedNoticeActions == dragId && len(item.actions ?? []) > 0 {
         Flow {
           fill: width
           gap: 8
@@ -392,9 +644,72 @@ face "Omagara" {
     }
   }
 
-  component AlphabetRail(side) {
+  // One notification viewport, used by both animated and reduced-motion layouts.
+  component NotificationPanel() {
     Column {
-      width: side == 1 ? 44 : 20
+      width: noticeWidth
+      height: max(0, noticeBottom - noticeTop)
+      clip: true
+      gap: 6
+      if notices == null {
+        Text { text: "Loading notifications…"; font: chosenFont; fontSize: 12; color: muted }
+      } else if !notices.available {
+        Text {
+          text: "Enable notifications"
+          font: chosenFont
+          fontSize: 12
+          color: accent
+          padding: [8, 12]
+          onTap: { queryText = ""; notification("open", "") }
+        }
+      } else if len(noticeItems) > 0 {
+        // Compact, independently square-by-default text shades. Avoid a
+        // full-width header slab so wallpaper remains visible between labels.
+        Row {
+          fill: width
+          gap: 8
+          align: center
+          Text {
+            text: "Notifications"
+            font: chosenFont
+            fontSize: 14
+            bold: true
+            color: primaryText
+            padding: [7, 9]
+            background: cfg.shadeNoticeLabels ? legibilityShade : transparent
+            radius: cfg.roundNoticeHeading ? 7 : 0
+          }
+          Spacer { weight: 1 }
+          if clearableNotices > 0 {
+            Text {
+              text: "Clear all"
+              font: chosenFont
+              fontSize: 13
+              color: primaryText
+              padding: [7, 9]
+              background: cfg.shadeNoticeLabels ? legibilityShade : transparent
+              radius: cfg.roundClearAll ? 7 : 0
+              onTap: notification("clear")
+            }
+          }
+        }
+        Column {
+          lazy: true
+          weight: 1
+          fill: width
+          gap: 4
+          for noticeRow in noticeRows key noticeRow.id {
+            NotificationRow { item: noticeRow.item; stack: noticeRow.stack; summary: noticeRow.summary }
+          }
+        }
+      }
+    }
+  }
+
+  component AlphabetRail(side) {
+    let visual = side == alphabetSide
+    Column {
+      width: visual ? 44 : 20
       height: railHeight
       gap: 0
       // Track both axes: outward thumb motion must work even without moving vertically.
@@ -408,17 +723,22 @@ face "Omagara" {
         railHeld = true
         draggingSide = 0
         railReturning = false
-        // Rubber-band only past the first/last letter center, max 68dp.
+        // A new touch cancels the optional ripple immediately.
+        railWiggling = false
+        railFlickStartY = y
+        railFlickLastY = y
+        railFlickStarted = time
+        // Beyond an endpoint, the worm follows the thumb 1:1 up to the screen edge.
         let edgeY = y < railStep / 2 ? y - railStep / 2 : y > railHeight - railStep / 2 ? y - (railHeight - railStep / 2) : 0
-        railOverpull = len(alphabet) < 2 ? 0 : clamp(edgeY * 0.48, -68, 68)
+        railOverpull = len(alphabet) < 2 ? 0 : clamp(edgeY, -railUpperReach, railLowerReach)
         railEnterStart = time
         railEntering = cfg.curve && !cfg.reduceMotion
         hapticSteps = 0
         // Track absolute thumb position while the rail's hit cells stay fixed.
-        // Aim the peak 84dp left of the thumb until the screen edge limits it.
-        railPull = side == 1 ? clamp(106 - x, 0, railMaxReach) : min(84, railMaxReach)
-        railThumbX = side == 1 ? railBaseX - 22 + x : screenLeft + x
-        touchY = railTop + clamp(y, 0, railHeight)
+        // Mirror the inward-facing curve when the rail is on the left.
+        railPull = visual ? (side == 1 ? clamp(106 - x, 0, railMaxReach) : clamp(62 + x, 0, railMaxReach)) : min(84, railMaxReach)
+        railThumbX = side == 1 ? (tileWidth ?? 400) - screenRight - 4 - (visual ? 44 : 20) + x : screenLeft + (visual ? 4 : 0) + x
+        touchY = clamp(railTop + y, screenTop, (tileHeight ?? 800) - screenInset)
         fingerPosition = clamp(y / railStep - 0.5, 0, max(0, len(alphabet) - 1))
         letter = get(alphabet, clamp(floor(y / railStep), 0, max(0, len(alphabet) - 1)), letter)
         if cfg.hapticFeedback != "Off" { haptic() }
@@ -433,15 +753,17 @@ face "Omagara" {
       onDrag: {
         appTracking = false
         appVelocity = 0
+        railReturning = false
+        railFlickLastY = y
         railHeld = true
         draggingSide = 1
         let edgeY = y < railStep / 2 ? y - railStep / 2 : y > railHeight - railStep / 2 ? y - (railHeight - railStep / 2) : 0
-        railOverpull = len(alphabet) < 2 ? 0 : clamp(edgeY * 0.48, -68, 68)
+        railOverpull = len(alphabet) < 2 ? 0 : clamp(edgeY, -railUpperReach, railLowerReach)
         // Track absolute thumb position while the rail's hit cells stay fixed.
-        // Aim the peak 84dp left of the thumb until the screen edge limits it.
-        railPull = side == 1 ? clamp(106 - x, 0, railMaxReach) : min(84, railMaxReach)
-        railThumbX = side == 1 ? railBaseX - 22 + x : screenLeft + x
-        touchY = railTop + clamp(y, 0, railHeight)
+        // Mirror the inward-facing curve when the rail is on the left.
+        railPull = visual ? (side == 1 ? clamp(106 - x, 0, railMaxReach) : clamp(62 + x, 0, railMaxReach)) : min(84, railMaxReach)
+        railThumbX = side == 1 ? (tileWidth ?? 400) - screenRight - 4 - (visual ? 44 : 20) + x : screenLeft + (visual ? 4 : 0) + x
+        touchY = clamp(railTop + y, screenTop, (tileHeight ?? 800) - screenInset)
         fingerPosition = clamp(y / railStep - 0.5, 0, max(0, len(alphabet) - 1))
         let nextLetter = get(alphabet, clamp(floor(y / railStep), 0, max(0, len(alphabet) - 1)), letter)
         if nextLetter != letter {
@@ -463,29 +785,71 @@ face "Omagara" {
       // a real drag release/cancellation always clears both states below.
       onRelease: {
         if draggingSide == 0 {
+          // Capture the actual visible shape, including partial entrance.
           railReturnFrom = railOverpull
+          railReturnPull = railPull
+          railReturnScale = railEnterEase
           railReturnStart = time
-          railReturning = !cfg.reduceMotion && abs(railOverpull) > 0.5
+          railReturning = !cfg.reduceMotion && (abs(railOverpull) > 0.5 || cfg.curve && railPull * railEnterEase > 0.5)
           railOverpull = 0
           railEntering = false
           activeSide = 0; railHeld = false; railPull = 0
         }
       }
       onDragEnd: {
+        // Lower-to-upper and upper-to-lower flicks create opposite ripples.
+        let flickTravel = railFlickLastY - railFlickStartY
+        let flickAge = max(0.04, time - railFlickStarted)
+        let upFlick = railFlickStartY >= railHeight * 0.60 && flickTravel <= -max(70, railStep * 4)
+        let downFlick = railFlickStartY <= railHeight * 0.40 && flickTravel >= max(70, railStep * 4)
+        railWiggling = !cfg.reduceMotion && draggingSide == 1 && (upFlick || downFlick) && flickAge <= 0.55 && abs(flickTravel) / flickAge >= 850
+        if railWiggling {
+          railWiggleStarted = time
+          railWiggleOrigin = clamp(railFlickStartY / railStep - 0.5, 0, max(0, len(alphabet) - 1))
+          railWiggleDirection = upFlick ? -1 : 1
+        }
         railReturnFrom = railOverpull
+        railReturnPull = railPull
+        railReturnScale = railEnterEase
         railReturnStart = time
-        railReturning = !cfg.reduceMotion && abs(railOverpull) > 0.5
+        railReturning = !cfg.reduceMotion && (abs(railOverpull) > 0.5 || cfg.curve && railPull * railEnterEase > 0.5)
         railOverpull = 0
         railEntering = false
         draggingSide = 0; activeSide = 0; railHeld = false; railPull = 0
       }
-      // Left input has no glyph nodes; either edge drives the right feedback.
-      if side == 1 && (cfg.idleAlphabet || activeSide != 0) {
+      // The selected edge draws the glyphs; the other edge is optional input.
+      // Keep showing the worm during its release return even if idle alphabet is hidden.
+      if visual && (cfg.idleAlphabet || activeSide != 0 || railReturning || railWiggling) {
         // Only move the visual worm: the rail's touch area stays put.
         Box {
           width: 44
           height: railHeight
           offset: [0, railVisualY]
+          // Two contour segments per letter while wiggling, four otherwise.
+          // Compute the wave once; letter centers reuse the same Canvas samples.
+          let wiggleActive = railWiggling && !cfg.reduceMotion
+          let contourSteps = wiggleActive ? 2 : 4
+          let wigglePhases = wiggleActive ? map(range(len(alphabet) * contourSteps + 1), j => railWiggleAge - abs(j / contourSteps - 0.5 - railWiggleOrigin) * 0.015) : []
+          let wiggleOffsets = wiggleActive ? map(wigglePhases, phase => phase > 0 && phase < 1.34 ? railWiggleDirection * 11 * pow(1 - phase / 1.34, 2) * sin(phase * 36) : 0) : []
+          if cfg.shadeAlphabet && len(alphabet) > 0 {
+            Canvas {
+              width: railMaxReach + 44
+              height: railHeight
+              offset: [alphabetSide == 1 ? -railMaxReach : 0, 0]
+              // Use the same wave as the glyphs, sampled at every letter center.
+              // In idle/drag states, retain the original four-point contour.
+              let wormSamples = map(range(len(alphabet) * contourSteps + 1), j => {
+                x: (alphabetSide == 1 ? railMaxReach + 22 : 22) - alphabetSide * railCurvePull *
+                  (railCurveStrength > 0 ? (1 + cos(rad(min(abs(j / contourSteps - 0.5 - fingerPosition) / max(10, min(14, len(alphabet) * 0.58)), 1) * 180))) / 2 * railCurveStrength : 0) - alphabetSide * (wiggleActive ? wiggleOffsets[j] : 0),
+                y: cfg.roundAlphabet ? 12 + j / max(1, len(alphabet) * contourSteps) * max(0, railHeight - 24) : j * railStep / contourSteps
+              })
+              path(map(wormSamples, p => [p.x - 12, p.y]) + reverse(map(wormSamples, p => [p.x + 12, p.y])), closed: true, fill: legibilityShade)
+              if cfg.roundAlphabet {
+                circle(first(wormSamples).x, first(wormSamples).y, 12, fill: legibilityShade)
+                circle(last(wormSamples).x, last(wormSamples).y, 12, fill: legibilityShade)
+              }
+            }
+          }
           Column {
             fill: true
             gap: 0
@@ -495,9 +859,10 @@ face "Omagara" {
               // sharp kink at the selected letter. The curve follows the finger
               // continuously; unchanged cells keep the same touch targets.
               let distance = abs(i - fingerPosition)
-              let expanded = activeSide != 0 && cfg.curve
               let radius = max(10, min(14, len(alphabet) * 0.58))
-              let curve = expanded ? (1 + cos(rad(min(distance / radius, 1) * 180))) / 2 * railEnterEase : 0
+              let curve = railCurveStrength > 0 ? (1 + cos(rad(min(distance / radius, 1) * 180))) / 2 * railCurveStrength : 0
+              // Sample the shared contour at this glyph's exact center.
+              let wiggleX = wiggleActive ? wiggleOffsets[i * contourSteps + contourSteps / 2] : 0
               Box {
                 height: railStep
                 fill: width
@@ -510,9 +875,7 @@ face "Omagara" {
                   bold: highlightedLetter == character && browsing
                   color: highlightedLetter == character && browsing ? accent : curve > 0 ? primaryText : len(get(groups, character, [])) > 0 ? secondaryText : alpha(secondaryText, cfg.textContrast == "High" ? 0.72 : 0.35)
                   align: center
-                  background: transparent
-                  radius: 4
-                  offset: [-railPull * curve, 0]
+                  offset: [-alphabetSide * (railCurvePull * curve + wiggleX), 0]
                   scale: 1 + 0.16 * curve
                 }
               }
@@ -634,8 +997,36 @@ face "Omagara" {
       Column {
         weight: 1
         gap: rowScale
-        Text { text: a.name; font: chosenFont; fontSize: 20 * rowScale; color: primaryText; maxLines: 1 }
-        if a.profile != null { Text { text: a.profile; font: chosenFont; fontSize: 11 * rowScale; color: secondaryText; maxLines: 1 } }
+        // Keep each shade close to its text, never across the full app row.
+        // Native Search retains its own surface; shade the transparent browser.
+        Row {
+          fill: width
+          Text {
+            text: a.name
+            font: chosenFont
+            fontSize: 20 * rowScale
+            color: primaryText
+            maxLines: 1
+            padding: cfg.shadeAppLabels && thumbView ? [2 * rowScale, 5 * rowScale] : [0, 0]
+            background: cfg.shadeAppLabels && thumbView ? appLabelShade : transparent
+            radius: cfg.shadeAppLabels && cfg.roundAppLabels && thumbView ? 6 * rowScale : 0
+          }
+        }
+        if a.profile != null {
+          Row {
+            fill: width
+            Text {
+              text: a.profile
+              font: chosenFont
+              fontSize: 11 * rowScale
+              color: secondaryText
+              maxLines: 1
+              padding: cfg.shadeAppLabels && thumbView ? [1 * rowScale, 5 * rowScale] : [0, 0]
+              background: cfg.shadeAppLabels && thumbView ? appLabelShade : transparent
+              radius: cfg.shadeAppLabels && cfg.roundAppLabels && thumbView ? 4 * rowScale : 0
+            }
+          }
+        }
       }
     }
   }
@@ -664,23 +1055,47 @@ face "Omagara" {
       gap: 0
       padding: [screenLeft + 24, screenTop + 12, screenRight + 24, 0]
       visible: !browsing
-      // Both taps open views inside this face’s native launcher screen.
-      Column {
+      // Independent, content-sized shades. No shared oversized floating slab.
+      Box {
         fill: width
-        gap: 6
-        padding: [0, compact ? 0 : 20, 0, 20]
-        Text { text: fmtTime(now, "HH:mm"); font: chosenFont; fontSize: compact ? 36 : 48; fontWeight: 300; color: primaryText; align: center; maxLines: 1; visible: cfg.clock; onTap: { if cfg.clockTap { queryText = ""; screenMode = "clock"; screen() } } }
-        Text { text: fmtTime(now, "EEEE, d MMMM"); font: chosenFont; fontSize: 16; color: secondaryText; align: center; maxLines: 1; visible: cfg.date; onTap: { if cfg.dateTap { pickedEvent = null; queryText = ""; screenMode = "calendar"; screen() } } }
-        if cfg.event && todayEvent != null {
-          Text {
-            text: todayEvent.title + " · " + (todayEvent.allDay ? "Today" : fmtTime(todayEvent.start, "HH:mm"))
-            font: chosenFont
-            fontSize: 13
-            color: secondaryText
-            align: center
-            maxLines: 1
-            padding: [0, 6]
-            onTap: { if cfg.eventTap { pickedEvent = todayEvent; queryText = ""; screenMode = "calendar"; screen() } }
+        align: center
+        Column {
+          fill: width
+          align: center
+          gap: 6
+          padding: [0, compact ? 0 : 20, 0, 20]
+          if cfg.clock {
+            Box {
+              width: compact ? 144 : 184
+              padding: [6, compact ? 3 : 8]
+              background: cfg.shadeHeader ? legibilityShade : transparent
+              radius: cfg.roundTime ? 12 : 0
+              align: center
+              onTap: { if cfg.clockTap { queryText = ""; screenMode = "clock"; screen() } }
+              Text { text: fmtTime(now, "HH:mm"); font: chosenFont; fontSize: compact ? 36 : 48; fontWeight: 300; color: primaryText; align: center; maxLines: 1 }
+            }
+          }
+          if cfg.date {
+            Box {
+              width: max(198, min(availableWidth - 96, 246))
+              padding: [8, 6]
+              background: cfg.shadeHeader ? legibilityShade : transparent
+              radius: cfg.roundDate ? 10 : 0
+              align: center
+              onTap: { if cfg.dateTap { pickedEvent = null; queryText = ""; screenMode = "calendar"; screen() } }
+              Text { text: fmtTime(now, "EEEE, d MMMM"); font: chosenFont; fontSize: 16; color: secondaryText; align: center; maxLines: 1 }
+            }
+          }
+          if cfg.event && todayEvent != null {
+            Box {
+              width: max(198, min(availableWidth - 64, 278))
+              padding: [8, 6]
+              background: cfg.shadeHeader ? legibilityShade : transparent
+              radius: cfg.roundEvent ? 10 : 0
+              align: center
+              onTap: { if cfg.eventTap { pickedEvent = todayEvent; queryText = ""; screenMode = "calendar"; screen() } }
+              Text { text: todayEvent.title + " · " + (todayEvent.allDay ? "Today" : fmtTime(todayEvent.start, "HH:mm")); font: chosenFont; fontSize: 13; color: secondaryText; align: center; maxLines: 1 }
+            }
           }
         }
       }
@@ -718,7 +1133,20 @@ face "Omagara" {
             offset: [0, row.top - appOffset]
             opacity: rowAlpha
             if row.heading {
-              Text { text: row.section; height: appLabelHeight; font: chosenFont; fontSize: 22 * appScale; color: secondaryText; maxLines: 1 }
+              Row {
+                fill: width
+                Text {
+                  text: row.section
+                  height: appLabelHeight
+                  font: chosenFont
+                  fontSize: 22 * appScale
+                  color: secondaryText
+                  maxLines: 1
+                  padding: cfg.shadeAppLabels ? [0, 5 * appScale] : [0, 0]
+                  background: cfg.shadeAppLabels ? appLabelShade : transparent
+                  radius: cfg.shadeAppLabels && cfg.roundAppLabels ? 4 * appScale : 0
+                }
+              }
             } else {
               AppRow { a: row.app; thumbView: true; interactive: rowAlpha > 0.08 && row.top >= appOffset && row.top + row.height <= appOffset + appPanelHeight }
             }
@@ -729,77 +1157,58 @@ face "Omagara" {
         }
       }
     }
-    // The notification viewport scrolls underneath Search and stops near the
-    // navigation inset. Search draws later and therefore stays on top.
-    Box {
-      fill: true
-      align: topStart
-      padding: [screenLeft + 20, noticeTop, screenRight + 60, 0]
-      visible: cfg.notifications && !browsing && activeSide == 0
-      Column {
-        width: noticeWidth
-        height: max(0, noticeBottom - noticeTop)
-        clip: true
-        gap: 6
-        if notices == null {
-          Text { text: "Loading notifications…"; font: chosenFont; fontSize: 12; color: muted }
-        } else if !notices.available {
-          Text {
-            text: "Enable notifications"
-            font: chosenFont
-            fontSize: 12
-            color: accent
-            padding: [8, 12]
-            onTap: { queryText = ""; notification("open", "") }
-          }
-        } else if len(noticeItems) > 0 {
-          if clearableNotices > 0 {
-            Row {
-              fill: width
-              Text { text: "Notifications"; font: chosenFont; fontSize: 13; color: secondaryText; weight: 1; padding: [0, 6] }
-              Text { text: "Clear all"; font: chosenFont; fontSize: 13; color: accent; padding: [12, 6]; onTap: notification("clear") }
-            }
-          }
-          Column {
-            lazy: true
-            weight: 1
-            fill: width
-            gap: 8
-            for noticeRow in noticeRows key noticeRow.id {
-              NotificationRow { item: noticeRow.item; stack: noticeRow.stack; summary: noticeRow.summary }
-            }
-          }
-        }
+    // The notifications use symmetrical 40dp margins, then shift 20dp
+    // away from the visible rail. With idle alphabet hidden, they center.
+    // Separate wrappers prevent a cached tween overriding Reduce Motion.
+    if cfg.reduceMotion {
+      Box {
+        fill: true
+        align: topStart
+        padding: [screenLeft + 40, noticeTop, screenRight + 40, 0]
+        visible: cfg.notifications && !browsing && activeSide == 0
+        offset: [noticePanelShift, 0]
+        NotificationPanel {}
+      }
+    } else {
+      Box {
+        fill: true
+        align: topStart
+        padding: [screenLeft + 40, noticeTop, screenRight + 40, 0]
+        visible: cfg.notifications && !browsing && activeSide == 0
+        offset: [noticePanelShift, 0]
+        animate offset: tween(260ms, "ease")
+        NotificationPanel {}
       }
     }
     Box {
       fill: true
       align: topStart
-      padding: [screenLeft, railTop, 0, 0]
-      AlphabetRail { side: -1; visible: cfg.leftInput }
+      padding: [screenLeft + (alphabetSide == -1 ? 4 : 0), railTop, 0, 0]
+      AlphabetRail { side: -1; visible: alphabetSide == -1 || cfg.leftInput }
     }
     Box {
       fill: true
       align: topEnd
       padding: [0, railTop, screenRight + 4, 0]
-      AlphabetRail { side: 1 }
-      // Keep the cue close to the peak, not stranded far to its left.
-      // At the screen edge, lift it above the peak to prevent an overlap.
-      if railHeld && activeSide != 0 {
-        let peakX = railBaseX - railPull
-        let bubbleX = max(screenLeft + 22, peakX - 42)
-        let peakLift = 40 * clamp((screenLeft + 56 - railThumbX) / 46, 0, 1)
-        let bubbleLift = peakLift + 66 * clamp((screenLeft + 60 - peakX) / 46, 0, 1)
-        Box {
-          size: 42
-          radius: cfg.bubbleShape == "Rounded" ? 21 : 0
-          border: cfg.bubbleBorder ? 1 : 0
-          borderColor: border
-          background: alpha(surface, 0.94)
-          align: center
-          offset: [bubbleX - railBaseX - 1, clamp(touchY - railTop - 21 - bubbleLift, 0, max(0, appSafeBottom - railTop - 42))]
-          Text { text: letter; font: chosenFont; fontSize: 20; color: accent; bold: true; align: center }
-        }
+      AlphabetRail { side: 1; visible: alphabetSide == 1 || cfg.leftInput }
+    }
+    // The selected-letter cue mirrors with the rail. Its screen-space
+    // position is independent of the fixed left and right touch targets.
+    if railHeld && activeSide != 0 {
+      let peakX = railHomeX - alphabetSide * railPull
+      let bubbleX = alphabetSide == 1 ? max(screenLeft + 22, peakX - 42) : min((tileWidth ?? 400) - screenRight - 22, peakX + 42)
+      let edgeThumbGap = alphabetSide == 1 ? screenLeft + 56 - railThumbX : railThumbX - ((tileWidth ?? 400) - screenRight - 56)
+      let edgePeakGap = alphabetSide == 1 ? screenLeft + 60 - peakX : peakX - ((tileWidth ?? 400) - screenRight - 60)
+      let bubbleLift = 40 * clamp(edgeThumbGap / 46, 0, 1) + 66 * clamp(edgePeakGap / 46, 0, 1)
+      Box {
+        size: 42
+        radius: cfg.roundLetterCue ? 21 : 0
+        border: cfg.bubbleBorder ? 1 : 0
+        borderColor: border
+        background: alpha(surface, 0.94)
+        align: center
+        offset: [bubbleX - 21, clamp(touchY - 21 - bubbleLift, screenTop + 4, max(screenTop + 4, appSafeBottom - 42))]
+        Text { text: letter; font: chosenFont; fontSize: 20; color: accent; bold: true; align: center }
       }
     }
     Box {
@@ -809,7 +1218,7 @@ face "Omagara" {
       visible: browsing && activeSide == 0
       Box {
         size: 48
-        radius: cfg.bubbleShape == "Rounded" ? 24 : 0
+        radius: cfg.roundClose ? 24 : 0
         border: cfg.bubbleBorder ? 1 : 0
         borderColor: border
         background: alpha(surface, 0.85)
@@ -826,7 +1235,7 @@ face "Omagara" {
         size: 48
         // Lower-letter magnification crosses this area; restore on release.
         visible: activeSide == 0
-        radius: cfg.bubbleShape == "Rounded" ? 24 : 0
+        radius: cfg.roundSearch ? 24 : 0
         border: cfg.bubbleBorder ? 1 : 0
         borderColor: border
         background: alpha(surface, 0.85)
@@ -912,6 +1321,15 @@ face "Omagara" {
               Text { text: pref.name; font: chosenFont; fontSize: 15; weight: 1 }
               Text { text: get(cfg, pref.key) ? "ON" : "OFF"; color: get(cfg, pref.key) ? accent : muted; fontSize: 14 }
             }
+            if pref.key == "idleAlphabet" {
+              Text { text: "Alphabet side"; font: chosenFont; fontSize: 14; color: secondaryText; padding: [4, 14, 0, 0] }
+              Flow {
+                gap: 8
+                for edge in ["Right", "Left"] {
+                  Button { text: (cfg.alphabetSide == edge ? "✓ " : "") + edge; onTap: prefs = set(prefs, "alphabetSide", edge) }
+                }
+              }
+            }
           }
         }
         Text { text: "Application icon style"; color: accent; padding: [0, 18, 0, 6] }
@@ -938,14 +1356,6 @@ face "Omagara" {
           }
         }
         Text { text: "Launcher uses the font selected in Omalauncher's Style settings."; font: chosenFont; fontSize: 13; color: secondaryText }
-        Text { text: "Bubble style"; color: accent; padding: [0, 18, 0, 6] }
-        Flow {
-          fill: width
-          gap: 8
-          for shape in bubbleShapeChoices {
-            Button { text: (cfg.bubbleShape == shape ? "✓ " : "") + shape; onTap: prefs = set(prefs, "bubbleShape", shape) }
-          }
-        }
         Row {
           fill: width
           align: center
@@ -954,7 +1364,7 @@ face "Omagara" {
           Text { text: "Show bubble borders"; font: chosenFont; fontSize: 15; weight: 1 }
           Text { text: cfg.bubbleBorder ? "ON" : "OFF"; color: cfg.bubbleBorder ? accent : muted; fontSize: 14 }
         }
-        Text { text: "Styles Search, Close, the selected letter, notification cards, and calendar cards. Square without borders is the default."; font: chosenFont; fontSize: 13; color: muted }
+        Text { text: "All corners are square by default. Set rounding separately per element above."; font: chosenFont; fontSize: 13; color: muted }
         Text { text: "Home text color"; color: accent; padding: [0, 18, 0, 6] }
         Flow {
           fill: width
@@ -1011,7 +1421,7 @@ face "Omagara" {
           text: "Import Omagara settings"
           onTap: {
             let imported = parseJson(importText)
-            if imported.version == 1 && all(keys(defaults), k => k == "appScale" ? get(imported.prefs, k) == null || contains(appScaleChoices, get(imported.prefs, k)) : k == "hapticFeedback" ? get(imported.prefs, k) == null || contains(hapticChoices, get(imported.prefs, k)) : k == "bubbleShape" ? get(imported.prefs, k) == null || contains(bubbleShapeChoices, get(imported.prefs, k)) : k == "bubbleBorder" ? get(imported.prefs, k) == null || get(imported.prefs, k) == true || get(imported.prefs, k) == false : k == "iconStyle" ? get(imported.prefs, k) == null || contains(iconStyleChoices, get(imported.prefs, k)) : k == "iconOverlayOpacity" ? get(imported.prefs, k) == null || contains(iconOverlayChoices, get(imported.prefs, k)) : k == "faceFont" ? get(imported.prefs, k) == null || contains(faceFontChoices, get(imported.prefs, k)) : k == "textTone" ? get(imported.prefs, k) == null || contains(textToneChoices, get(imported.prefs, k)) : k == "textContrast" ? get(imported.prefs, k) == null || contains(textContrastChoices, get(imported.prefs, k)) : get(imported.prefs, k) == true || get(imported.prefs, k) == false || (k == "calculator" || k == "searchContacts") && get(imported.prefs, k) == null) && sub(toJson(imported.zones), 0, 1) == "[" && all(imported.zones, z => contains(zoneChoices, z)) {
+            if imported.version == 1 && all(keys(defaults), k => k == "appScale" ? get(imported.prefs, k) == null || contains(appScaleChoices, get(imported.prefs, k)) : k == "hapticFeedback" ? get(imported.prefs, k) == null || contains(hapticChoices, get(imported.prefs, k)) : k == "bubbleBorder" ? get(imported.prefs, k) == null || get(imported.prefs, k) == true || get(imported.prefs, k) == false : k == "iconStyle" ? get(imported.prefs, k) == null || contains(iconStyleChoices, get(imported.prefs, k)) : k == "iconOverlayOpacity" ? get(imported.prefs, k) == null || contains(iconOverlayChoices, get(imported.prefs, k)) : k == "faceFont" ? get(imported.prefs, k) == null || contains(faceFontChoices, get(imported.prefs, k)) : k == "textTone" ? get(imported.prefs, k) == null || contains(textToneChoices, get(imported.prefs, k)) : k == "textContrast" ? get(imported.prefs, k) == null || contains(textContrastChoices, get(imported.prefs, k)) : k == "alphabetSide" ? get(imported.prefs, k) == null || contains(["Left", "Right"], get(imported.prefs, k)) : get(imported.prefs, k) == true || get(imported.prefs, k) == false || (k == "calculator" || k == "searchContacts") && get(imported.prefs, k) == null) && sub(toJson(imported.zones), 0, 1) == "[" && all(imported.zones, z => contains(zoneChoices, z)) {
               letter = highlightedLetter; appTracking = false
               prefs = reduce(keys(defaults), (m, k) => set(m, k, k == "searchContacts" ? false : (get(imported.prefs, k) ?? get(defaults, k))), {})
               worldZones = unique(imported.zones ?? [])
@@ -1141,7 +1551,7 @@ face "Omagara" {
                 Column {
                   fill: width
                   padding: [12, 16]
-                  radius: cfg.bubbleShape == "Rounded" ? 12 : 0
+                  radius: cfg.roundCalendar ? 12 : 0
                   border: cfg.bubbleBorder ? 1 : 0
                   borderColor: border
                   background: surface
