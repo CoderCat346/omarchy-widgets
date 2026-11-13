@@ -1,5 +1,5 @@
 face "Daily learning" {
-  meta { owl: 18; description: "Published daily word and a daily selection of sourced college math problems"; version: "4.1.1"; license: "MIT"; category: "productivity" }
+  meta { owl: 18; description: "Published daily word and a daily selection of sourced college math problems"; version: "4.1.2"; license: "MIT"; category: "productivity" }
   page: 0
   padding: 0
   background: linear(0, 0, 1, 1, [background, mix(background, blue, 0.12), background])
@@ -179,7 +179,7 @@ console.log(JSON.stringify({word,problem}));
           if problem.error { Text { text: problem.error; fontSize: 12; color: yellow } }
           Button { text: "Solution in browser ↗"; onTap: url(problem.url ?? "https://math.stackexchange.com/") }
         }
-        Button { text: "Atualizar dos sites ↻"; onTap: reload = reload + 1 }
+        Button { text: "Refresh from websites"; onTap: reload = reload + 1 }
         Text { text: "Published content · saved locally for offline reading\nMath is selected daily from the archive."; fontSize: 11; color: muted; align: center }
       }
     Spacer { height: screenInset }
