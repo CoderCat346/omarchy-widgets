@@ -1,0 +1,163 @@
+face "Daily learning" {
+  meta { owl: 18; description: "Published daily word and a daily selection of sourced college math problems"; version: "4.1"; license: "MIT"; category: "productivity" }
+  page: 0
+  padding: 0
+  background: linear(0, 0, 1, 1, [background, mix(background, blue, 0.12), background])
+  source now = clock every 1m
+  let date = fmtTime(now, "yyyy-MM-dd")
+  requires { pacman: ["nodejs", "npm"] }
+  source data = cmd("""node -e 'const fs=require('"'"'fs'"'"');
+const dir=require('"'"'path'"'"').join(require('"'"'os'"'"').homedir(),'"'"'.cache'"'"','"'"'daily-learning'"'"');
+fs.mkdirSync(dir,{recursive:true});
+const date=/^\d{4}-\d{2}-\d{2}$/.test(process.argv[1]||'"'"''"'"') ? process.argv[1] : new Date().toISOString().slice(0,10);
+const decode=s=>s.replace(/&#x([0-9a-f]+);/gi,(_,n)=>String.fromCodePoint(parseInt(n,16))).replace(/&#(\d+);/g,(_,n)=>String.fromCodePoint(+n)).replace(/&(amp|lt|gt|quot|apos|nbsp);/g,(_,n)=>({amp:'"'"'&'"'"',lt:'"'"'<'"'"',gt:'"'"'>'"'"',quot:'"'"'"'"'"',apos:"'"'"'",nbsp:'"'"' '"'"'})[n]);
+const plain=s=>decode(s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,'"'"'$1'"'"').replace(/<\/(p|div|blockquote|li|h\d)>/g,'"'"'\n\n'"'"').replace(/<br\s*\/?>/g,'"'"'\n'"'"').replace(/<[^>]+>/g,'"'"''"'"')).replace(/\n\s*\n\s*\n/g,'"'"'\n\n'"'"').trim();
+const math=s=>plain(s);
+const get=async u=>{let r=await fetch(u,{signal:AbortSignal.timeout(18000),headers:{'"'"'User-Agent'"'"':'"'"'DailyLearningPersonalWidget/1.0'"'"'}});if(!r.ok)throw Error('"'"'HTTP '"'"'+r.status);return r.text()};
+async function cached(name,fn){const p=dir+'"'"'/'"'"'+name+'"'"'.json'"'"';let old={};try{old=JSON.parse(fs.readFileSync(p,'"'"'utf8'"'"'))}catch{};if(old.checked===date&&!old.error&&(name!=="math"||old.rawTex))return old;try{const fresh={...await fn(),checked:date,fetched:new Date().toISOString()};fs.writeFileSync(p,JSON.stringify(fresh));return fresh}catch(e){return {...old,error:'"'"'Could not refresh: '"'"'+e.message,stale:!!old.title}}}
+async function libraries() {
+  const path=require('"'"'path'"'"');
+  const crypto=require('"'"'crypto'"'"');
+  const manifest={"name":"daily-learning-equations","private":true,"dependencies":{"mathjax-full":"3.2.1","sharp":"0.35.5"}};
+  const lock={"name":"daily-learning-equations","lockfileVersion":3,"requires":true,"packages":{"":{"dependencies":{"mathjax-full":"3.2.1","sharp":"0.35.5"}},"node_modules/@emnapi/runtime":{"version":"1.11.3","resolved":"https://registry.npmjs.org/@emnapi/runtime/-/runtime-1.11.3.tgz","integrity":"sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==","license":"MIT","optional":true,"dependencies":{"tslib":"^2.4.0"}},"node_modules/@img/colour":{"version":"1.1.0","resolved":"https://registry.npmjs.org/@img/colour/-/colour-1.1.0.tgz","integrity":"sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==","license":"MIT","engines":{"node":">=18"}},"node_modules/@img/sharp-darwin-arm64":{"version":"0.35.5","resolved":"https://registry.npmjs.org/@img/sharp-darwin-arm64/-/sharp-darwin-arm64-0.35.5.tgz","integrity":"sha512-QRUlFQ0WxvdWyqqG/WtI3iupfD5rBzmCHXSdPsY91sAtVtTo7Q4cb6zOccZ3gqEqkr0f1As1ehLqmEpDsRf+lg==","cpu":["arm64"],"license":"Apache-2.0","optional":true,"os":["darwin"],"engines":{"node":">=20.9.0"},"funding":{"url":"https://opencollective.com/libvips"},"optionalDependencies":{"@img/sharp-libvips-darwin-arm64":"1.3.4"}},"node_modules/@img/sharp-darwin-x64":{"version":"0.35.5","resolved":"https://registry.npmjs.org/@img/sharp-darwin-x64/-/sharp-darwin-x64-0.35.5.tgz","integrity":"sha512-+BR255RhDlpygUpOc/Jdt1nT6DQ3XG/ERo5wbcdOf5Q320dKtPCKPLR1LJs9VGXRaMa8l1uUa0tkCNOXiAxZUw==","cpu":["x64"],"license":"Apache-2.0","optional":true,"os":["darwin"],"engines":{"node":">=20.9.0"},"funding":{"url":"https://opencollective.com/libvips"},"optionalDependencies":{"@img/sharp-libvips-darwin-x64":"1.3.4"}},"node_modules/@img/sharp-freebsd-wasm32":{"version":"0.35.5","resolved":"https://registry.npmjs.org/@img/sharp-freebsd-wasm32/-/sharp-freebsd-wasm32-0.35.5.tgz","integrity":"sha512-Y/z91nEZ4uIBX5X3nfTovjU9lHNKFYbL2lpHCLVNmXQK03VIZvXBBt0KxbPGp2SdGSF+2mQU4e+hQaWOt86iAw==","license":"Apache-2.0","optional":true,"os":["freebsd"],"dependencies":{"@img/sharp-wasm32":"0.35.5"},"engines":{"node":">=20.9.0"},"funding":{"url":"https://opencollective.com/libvips"}},"node_modules/@img/sharp-libvips-darwin-arm64":{"version":"1.3.4","resolved":"https://registry.npmjs.org/@img/sharp-libvips-darwin-arm64/-/sharp-libvips-darwin-arm64-1.3.4.tgz","integrity":"sha512-5R89nBYiRdUlSWJxPhO+GVtaXzXSxKnRu/xqMn3KTA3L9EB9Oy/P+Nn2f2vlhPuUdy/Zusb2DarbyTpGCfEDuw==","cpu":["arm64"],"license":"LGPL-3.0-or-later","optional":true,"os":["darwin"],"funding":{"url":"https://opencollective.com/libvips"}},"node_modules/@img/sharp-libvips-darwin-x64":{"version":"1.3.4","resolved":"https://registry.npmjs.org/@img/sharp-libvips-darwin-x64/-/sharp-libvips-darwin-x64-1.3.4.tgz","integrity":"sha512-iR2OKH80yi0U+dUplyh3/xdpFvps6YkCwsXenIJxqxR1v9o+xtKTGbS9H7cps+2Vxjc8B1j96p75NmTGjIhtpQ==","cpu":["x64"],"license":"LGPL-3.0-or-later","optional":true,"os":["darwin"],"funding":{"url":"https://opencollective.com/libvips"}},"node_modules/@img/sharp-libvips-linux-arm":{"version":"1.3.4","resolved":"https://registry.npmjs.org/@img/sharp-libvips-linux-arm/-/sharp-libvips-linux-arm-1.3.4.tgz","integrity":"sha512-LmRtTsOHuvM2+wlO2Db37dx5MiZhB0FvSunciw48YjdOkZz9KAiRbm8ujeMOA1INqmei5NapFxYEK1D1ZSidmw==","cpu":["arm"],"libc":["glibc"],"license":"LGPL-3.0-or-later","optional":true,"os":["linux"],"funding":{"url":"https://opencollective.com/libvips"}},"node_modules/@img/sharp-libvips-linux-arm64":{"version":"1.3.4","resolved":"https://registry.npmjs.org/@img/sharp-libvips-linux-arm64/-/sharp-libvips-linux-arm64-1.3.4.tgz","integrity":"sha512-Y3dgX/6lE2QhQb+Gxy0WZxfg9MEm/JBjamZpS2IklP7xIQoKN4hzAm7KcMVGtaVDt3neE9OKBC7vAfonA/Lr1A==","cpu":["arm64"],"libc":["glibc"],"license":"LGPL-3.0-or-later","optional":true,"os":["linux"],"funding":{"url":"https://opencollective.com/libvips"}},"node_modules/@img/sharp-libvips-linux-ppc64":{"version":"1.3.4","resolved":"https://registry.npmjs.org/@img/sharp-libvips-linux-ppc64/-/sharp-libvips-linux-ppc64-1.3.4.tgz","integrity":"sha512-Le6boB8Tai0Nis+gIxIpKx68UDVVIqdR8Tin5Yf1z2LJJQLDJvCDRqRu+jC2qCoD+eIomonmOwB4smBRxfVpYQ==","cpu":["ppc64"],"libc":["glibc"],"license":"LGPL-3.0-or-later","optional":true,"os":["linux"],"funding":{"url":"https://opencollective.com/libvips"}},"node_modules/@img/sharp-libvips-linux-riscv64":{"version":"1.3.4","resolved":"https://registry.npmjs.org/@img/sharp-libvips-linux-riscv64/-/sharp-libvips-linux-riscv64-1.3.4.tgz","integrity":"sha512-aHkkIEHPRdQEegJN20MLmGtxYD9R2wQr3Cwpddnu5+YKMt6Uzax7S9h5gpZTo8wyrGuZSlfQ63OevL5mTyOC7Q==","cpu":["riscv64"],"libc":["glibc"],"license":"LGPL-3.0-or-later","optional":true,"os":["linux"],"funding":{"url":"https://opencollective.com/libvips"}},"node_modules/@img/sharp-libvips-linux-s390x":{"version":"1.3.4","resolved":"https://registry.npmjs.org/@img/sharp-libvips-linux-s390x/-/sharp-libvips-linux-s390x-1.3.4.tgz","integrity":"sha512-ra/mB6MikESDUO7Yg+Mi95bFBb9GsObURuhnOv3OqknjGe9sZrG8tCe9q0xSIGrtLgvgw0gKnFWcK4blSgQOuQ==","cpu":["s390x"],"libc":["glibc"],"license":"LGPL-3.0-or-later","optional":true,"os":["linux"],"funding":{"url":"https://opencollective.com/libvips"}},"node_modules/@img/sharp-libvips-linux-x64":{"version":"1.3.4","resolved":"https://registry.npmjs.org/@img/sharp-libvips-linux-x64/-/sharp-libvips-linux-x64-1.3.4.tgz","integrity":"sha512-GJ//SSXbnwSDes02umB3nDJLFcQzw8a18V8fyhqr6tV515tOEMdImjjxj1AoafMRz56F3PHgftnj1QEKSU1zkw==","cpu":["x64"],"libc":["glibc"],"license":"LGPL-3.0-or-later","optional":true,"os":["linux"],"funding":{"url":"https://opencollective.com/libvips"}},"node_modules/@img/sharp-libvips-linuxmusl-arm64":{"version":"1.3.4","resolved":"https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-arm64/-/sharp-libvips-linuxmusl-arm64-1.3.4.tgz","integrity":"sha512-hvulFwtjUcagsis6BBxHwGFwWoNZjgYmULGVrZcyfNbjA8hKILbRxGg15/7w5HDyXHXUos/j6baAWqnCyQ2DWA==","cpu":["arm64"],"libc":["musl"],"license":"LGPL-3.0-or-later","optional":true,"os":["linux"],"funding":{"url":"https://opencollective.com/libvips"}},"node_modules/@img/sharp-libvips-linuxmusl-x64":{"version":"1.3.4","resolved":"https://registry.npmjs.org/@img/sharp-libvips-linuxmusl-x64/-/sharp-libvips-linuxmusl-x64-1.3.4.tgz","integrity":"sha512-6zXKeE/p39I1AmA3cJG35eyBGNqNddLnUXjhwBnsGjFPWqf5VKkDBEqaEkPDoTEtkxwi2vv8Tcr2mDyP4So7Fg==","cpu":["x64"],"libc":["musl"],"license":"LGPL-3.0-or-later","optional":true,"os":["linux"],"funding":{"url":"https://opencollective.com/libvips"}},"node_modules/@img/sharp-linux-arm":{"version":"0.35.5","resolved":"https://registry.npmjs.org/@img/sharp-linux-arm/-/sharp-linux-arm-0.35.5.tgz","integrity":"sha512-LEaXK2WdXVK5ykcw0buWyPMsmLLL2vpHLD6yrNSW+JGEL3BZPA4tpKN6iaMc4AxTTAoaX/sU1rOL51lcIz48ZQ==","cpu":["arm"],"libc":["glibc"],"license":"Apache-2.0","optional":true,"os":["linux"],"engines":{"node":">=20.9.0"},"funding":{"url":"https://opencollective.com/libvips"},"optionalDependencies":{"@img/sharp-libvips-linux-arm":"1.3.4"}},"node_modules/@img/sharp-linux-arm64":{"version":"0.35.5","resolved":"https://registry.npmjs.org/@img/sharp-linux-arm64/-/sharp-linux-arm64-0.35.5.tgz","integrity":"sha512-LYVx5JTsOM2CBzmxreh+nl64/3H6Xb09iSLknqH47z2T2DFFxDeFLP5y4dJwe6H7uGQlHPyEEtIqyo3DYsRwdQ==","cpu":["arm64"],"libc":["glibc"],"license":"Apache-2.0","optional":true,"os":["linux"],"engines":{"node":">=20.9.0"},"funding":{"url":"https://opencollective.com/libvips"},"optionalDependencies":{"@img/sharp-libvips-linux-arm64":"1.3.4"}},"node_modules/@img/sharp-linux-ppc64":{"version":"0.35.5","resolved":"https://registry.npmjs.org/@img/sharp-linux-ppc64/-/sharp-linux-ppc64-0.35.5.tgz","integrity":"sha512-QVxAAq8evVRI9ia2vqgwrmWucn5Dfv+JdWzj75pD8omHLPSP7f8p20O8jxzjCcuCEQEOtYOZUmX1hkiZ0kdevA==","cpu":["ppc64"],"libc":["glibc"],"license":"Apache-2.0","optional":true,"os":["linux"],"engines":{"node":">=20.9.0"},"funding":{"url":"https://opencollective.com/libvips"},"optionalDependencies":{"@img/sharp-libvips-linux-ppc64":"1.3.4"}},"node_modules/@img/sharp-linux-riscv64":{"version":"0.35.5","resolved":"https://registry.npmjs.org/@img/sharp-linux-riscv64/-/sharp-linux-riscv64-0.35.5.tgz","integrity":"sha512-LtdreXguaavKODPIfzJ4kffx7UNt1omwtK0rch4EBbbSTXPnxWmYSayXdLJw0fJzQ97kHt1gL/yh4tvU+nCyRQ==","cpu":["riscv64"],"libc":["glibc"],"license":"Apache-2.0","optional":true,"os":["linux"],"engines":{"node":">=20.9.0"},"funding":{"url":"https://opencollective.com/libvips"},"optionalDependencies":{"@img/sharp-libvips-linux-riscv64":"1.3.4"}},"node_modules/@img/sharp-linux-s390x":{"version":"0.35.5","resolved":"https://registry.npmjs.org/@img/sharp-linux-s390x/-/sharp-linux-s390x-0.35.5.tgz","integrity":"sha512-UZasTOFiYzotTsGOCu42BfUzP6Tu6Do/947iRm1RsLKvlllxwGcn4RN27LibGWceix4Y+Pmw3jsnTcCQIgWjqA==","cpu":["s390x"],"libc":["glibc"],"license":"Apache-2.0","optional":true,"os":["linux"],"engines":{"node":">=20.9.0"},"funding":{"url":"https://opencollective.com/libvips"},"optionalDependencies":{"@img/sharp-libvips-linux-s390x":"1.3.4"}},"node_modules/@img/sharp-linux-x64":{"version":"0.35.5","resolved":"https://registry.npmjs.org/@img/sharp-linux-x64/-/sharp-linux-x64-0.35.5.tgz","integrity":"sha512-SxFtLTeJInhAA9Q836kux2vZNeOBQEx658qvbboZScr0wIARym3IcGmW7KpVD5sbVg0Ojy+udFQdayYIZyoNog==","cpu":["x64"],"libc":["glibc"],"license":"Apache-2.0","optional":true,"os":["linux"],"engines":{"node":">=20.9.0"},"funding":{"url":"https://opencollective.com/libvips"},"optionalDependencies":{"@img/sharp-libvips-linux-x64":"1.3.4"}},"node_modules/@img/sharp-linuxmusl-arm64":{"version":"0.35.5","resolved":"https://registry.npmjs.org/@img/sharp-linuxmusl-arm64/-/sharp-linuxmusl-arm64-0.35.5.tgz","integrity":"sha512-9HbMclmI1zlNkFRs3z9/eBtDjfD0sGlrX1z6b1qwmiFY5ElDLh4BC0LPBdVp7z1DXFiKlIcznf+ZlsuZzLxQqg==","cpu":["arm64"],"libc":["musl"],"license":"Apache-2.0","optional":true,"os":["linux"],"engines":{"node":">=20.9.0"},"funding":{"url":"https://opencollective.com/libvips"},"optionalDependencies":{"@img/sharp-libvips-linuxmusl-arm64":"1.3.4"}},"node_modules/@img/sharp-linuxmusl-x64":{"version":"0.35.5","resolved":"https://registry.npmjs.org/@img/sharp-linuxmusl-x64/-/sharp-linuxmusl-x64-0.35.5.tgz","integrity":"sha512-4KOphqB035HrVdqLZfCgMzzERrQkkzOwRhl4OAkRO1YCldbaFjySXMaK534Mo0V+LndnlJk+sbUyLeU0ULyD1A==","cpu":["x64"],"libc":["musl"],"license":"Apache-2.0","optional":true,"os":["linux"],"engines":{"node":">=20.9.0"},"funding":{"url":"https://opencollective.com/libvips"},"optionalDependencies":{"@img/sharp-libvips-linuxmusl-x64":"1.3.4"}},"node_modules/@img/sharp-wasm32":{"version":"0.35.5","resolved":"https://registry.npmjs.org/@img/sharp-wasm32/-/sharp-wasm32-0.35.5.tgz","integrity":"sha512-Ptsga1su4tQx+LLF1ECS9U6nz5kmrXKo6XVbtR48Ke3ZRxxgaWBu7IDtEe1quo8hiupwm6WFqxVlXaSf7IINGQ==","license":"Apache-2.0 AND LGPL-3.0-or-later AND MIT","optional":true,"dependencies":{"@emnapi/runtime":"^1.11.3"},"engines":{"node":">=20.9.0"},"funding":{"url":"https://opencollective.com/libvips"}},"node_modules/@img/sharp-webcontainers-wasm32":{"version":"0.35.5","resolved":"https://registry.npmjs.org/@img/sharp-webcontainers-wasm32/-/sharp-webcontainers-wasm32-0.35.5.tgz","integrity":"sha512-hfhF/FmoQyTUkA0bIKFOtw536BQSeBMe6BF6QyWlrPxT754+TFLaZ7sKKTfvvM0yJgKgaYTwnFCIZ/GuDw5SUA==","cpu":["wasm32"],"license":"Apache-2.0","optional":true,"dependencies":{"@img/sharp-wasm32":"0.35.5"},"engines":{"node":">=20.9.0"},"funding":{"url":"https://opencollective.com/libvips"}},"node_modules/@img/sharp-win32-arm64":{"version":"0.35.5","resolved":"https://registry.npmjs.org/@img/sharp-win32-arm64/-/sharp-win32-arm64-0.35.5.tgz","integrity":"sha512-X4t7g+7ZA5DKblCBEXGjUqqemj4vczING/5viFwAL8h4N3qYeyjwdCvRLHi4EdOUI+2Z7UFlp1VM+p/AuEtm6Q==","cpu":["arm64"],"license":"Apache-2.0 AND LGPL-3.0-or-later","optional":true,"os":["win32"],"engines":{"node":">=20.9.0"},"funding":{"url":"https://opencollective.com/libvips"}},"node_modules/@img/sharp-win32-ia32":{"version":"0.35.5","resolved":"https://registry.npmjs.org/@img/sharp-win32-ia32/-/sharp-win32-ia32-0.35.5.tgz","integrity":"sha512-5Zm82LoBc43nhwNybZlG7Y1KO//Zhsn306fQl29ZOuStHLGTo3BWL83q3cznX0poxSAMuYL1On/BHBxkBeKr6A==","cpu":["ia32"],"license":"Apache-2.0 AND LGPL-3.0-or-later","optional":true,"os":["win32"],"engines":{"node":"^20.9.0"},"funding":{"url":"https://opencollective.com/libvips"}},"node_modules/@img/sharp-win32-x64":{"version":"0.35.5","resolved":"https://registry.npmjs.org/@img/sharp-win32-x64/-/sharp-win32-x64-0.35.5.tgz","integrity":"sha512-x76eH0vEiHlcMQu8Y8IenntaACtddpT6W0wmXtWrnKcnKI7ME5DdgqhAD6SEWOEl1v2zDvkZDhFA9KnURwpfqg==","cpu":["x64"],"license":"Apache-2.0 AND LGPL-3.0-or-later","optional":true,"os":["win32"],"engines":{"node":">=20.9.0"},"funding":{"url":"https://opencollective.com/libvips"}},"node_modules/@xmldom/xmldom":{"version":"0.9.12","resolved":"https://registry.npmjs.org/@xmldom/xmldom/-/xmldom-0.9.12.tgz","integrity":"sha512-5AXjrcMClTryPe9LgZrygpB1lj7s0S9E0+W+AHaVKAVyHanafK86iPSvG5xHVSp/jC+VH1UXu0TAEmY279xH7A==","license":"MIT","engines":{"node":">=14.6"}},"node_modules/commander":{"version":"13.1.0","resolved":"https://registry.npmjs.org/commander/-/commander-13.1.0.tgz","integrity":"sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw==","license":"MIT","engines":{"node":">=18"}},"node_modules/detect-libc":{"version":"2.1.2","resolved":"https://registry.npmjs.org/detect-libc/-/detect-libc-2.1.2.tgz","integrity":"sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==","license":"Apache-2.0","engines":{"node":">=8"}},"node_modules/esm":{"version":"3.2.25","resolved":"https://registry.npmjs.org/esm/-/esm-3.2.25.tgz","integrity":"sha512-U1suiZ2oDVWv4zPO56S0NcR5QriEahGtdN2OR6FiOG4WJvcjBVFB0qI4+eKoWFH483PKGuLuu6V8Z4T5g63UVA==","license":"MIT","engines":{"node":">=6"}},"node_modules/mathjax-full":{"version":"3.2.1","resolved":"https://registry.npmjs.org/mathjax-full/-/mathjax-full-3.2.1.tgz","integrity":"sha512-aUz9o16MGZdeiIBwZjAfUBTiJb7LRqzZEl1YOZ8zQMGYIyh1/nxRebxKxjDe9L+xcZCr2OHdzoFBMcd6VnLv9Q==","license":"Apache-2.0","dependencies":{"esm":"^3.2.25","mhchemparser":"^4.1.0","mj-context-menu":"^0.6.1","speech-rule-engine":"^4.0.6"}},"node_modules/mhchemparser":{"version":"4.2.1","resolved":"https://registry.npmjs.org/mhchemparser/-/mhchemparser-4.2.1.tgz","integrity":"sha512-kYmyrCirqJf3zZ9t/0wGgRZ4/ZJw//VwaRVGA75C4nhE60vtnIzhl9J9ndkX/h6hxSN7pjg/cE0VxbnNM+bnDQ==","license":"Apache-2.0"},"node_modules/mj-context-menu":{"version":"0.6.1","resolved":"https://registry.npmjs.org/mj-context-menu/-/mj-context-menu-0.6.1.tgz","integrity":"sha512-7NO5s6n10TIV96d4g2uDpG7ZDpIhMh0QNfGdJw/W47JswFcosz457wqz/b5sAKvl12sxINGFCn80NZHKwxQEXA==","license":"Apache-2.0"},"node_modules/semver":{"version":"7.8.6","resolved":"https://registry.npmjs.org/semver/-/semver-7.8.6.tgz","integrity":"sha512-9lpSSU4Mly3mrtruwLs1eLK6+gzbzqeBFwRNjIjE+9LuDpWdYctrQlQ3ej1Ilgi7gknpsTRnPoLP8DpCHqHIJw==","license":"ISC","bin":{"semver":"bin/semver.js"},"engines":{"node":">=10"}},"node_modules/sharp":{"version":"0.35.5","resolved":"https://registry.npmjs.org/sharp/-/sharp-0.35.5.tgz","integrity":"sha512-Ywn4OnzGukp7CDMrp08RQ50YKmuwG47brZgIVPTvBaaAfQlRlygrRqSrxdCiL9M+LlzLBiJ68IR1QqvzHyjC7g==","license":"Apache-2.0","dependencies":{"@img/colour":"^1.1.0","detect-libc":"^2.1.2","semver":"^7.8.5"},"engines":{"node":">=20.9.0"},"funding":{"url":"https://opencollective.com/libvips"},"optionalDependencies":{"@img/sharp-darwin-arm64":"0.35.5","@img/sharp-darwin-x64":"0.35.5","@img/sharp-freebsd-wasm32":"0.35.5","@img/sharp-libvips-darwin-arm64":"1.3.4","@img/sharp-libvips-darwin-x64":"1.3.4","@img/sharp-libvips-linux-arm":"1.3.4","@img/sharp-libvips-linux-arm64":"1.3.4","@img/sharp-libvips-linux-ppc64":"1.3.4","@img/sharp-libvips-linux-riscv64":"1.3.4","@img/sharp-libvips-linux-s390x":"1.3.4","@img/sharp-libvips-linux-x64":"1.3.4","@img/sharp-libvips-linuxmusl-arm64":"1.3.4","@img/sharp-libvips-linuxmusl-x64":"1.3.4","@img/sharp-linux-arm":"0.35.5","@img/sharp-linux-arm64":"0.35.5","@img/sharp-linux-ppc64":"0.35.5","@img/sharp-linux-riscv64":"0.35.5","@img/sharp-linux-s390x":"0.35.5","@img/sharp-linux-x64":"0.35.5","@img/sharp-linuxmusl-arm64":"0.35.5","@img/sharp-linuxmusl-x64":"0.35.5","@img/sharp-webcontainers-wasm32":"0.35.5","@img/sharp-win32-arm64":"0.35.5","@img/sharp-win32-ia32":"0.35.5","@img/sharp-win32-x64":"0.35.5"},"peerDependenciesMeta":{"@types/node":{"optional":true}}},"node_modules/speech-rule-engine":{"version":"4.1.5","resolved":"https://registry.npmjs.org/speech-rule-engine/-/speech-rule-engine-4.1.5.tgz","integrity":"sha512-Nx4d44Ca0FQ4ve9WS8Ja6w2zkI9q7JvH1+3nI9zh4aU/vICXTZWzzYR4MyYRkk/5vcF7OMkwjYkX3qrfahfOgg==","license":"Apache-2.0","dependencies":{"@xmldom/xmldom":"^0.9.12","commander":"13.1.0","wicked-good-xpath":"1.3.0"},"bin":{"sre":"bin/sre"}},"node_modules/tslib":{"version":"2.9.1","resolved":"https://registry.npmjs.org/tslib/-/tslib-2.9.1.tgz","integrity":"sha512-a4Ux9VKuIMHsOS7ENbEq6hK2ZGYIT27Rtl0E4eD9KqwxhKiQeMZE/9xb3IdYwWaSOyIBQLExhQgXDTYoiCxnWA==","license":"0BSD","optional":true},"node_modules/wicked-good-xpath":{"version":"1.3.0","resolved":"https://registry.npmjs.org/wicked-good-xpath/-/wicked-good-xpath-1.3.0.tgz","integrity":"sha512-Gd9+TUn5nXdwj/hFsPVx5cuHHiF5Bwuc30jZ4+ronF1qHK5O7HD0sgmXWSEgwKquT3ClLoKPVbO6qGwVwLzvAw==","license":"MIT"}}};
+  const contents=JSON.stringify(lock);
+  const root=path.join(dir,'"'"'runtime-'"'"'+crypto.createHash('"'"'sha256'"'"').update(contents).digest('"'"'hex'"'"').slice(0,16));
+  fs.mkdirSync(root,{recursive:true});
+  const ready=path.join(root,'"'"'.ready'"'"');
+  if(!fs.existsSync(ready)) {
+    const mutex=path.join(root,'"'"'.installing'"'"');
+    let owner=false;
+    for(let attempt=0;attempt<170&&!owner&&!fs.existsSync(ready);attempt++) {
+      try { fs.mkdirSync(mutex); owner=true; }
+      catch(e) {
+        if(e.code!=='"'"'EEXIST'"'"')throw e;
+        if(Date.now()-fs.statSync(mutex).mtimeMs>180000)fs.rmdirSync(mutex);
+        else await new Promise(resolve=>setTimeout(resolve,1000));
+      }
+    }
+    if(owner) {
+      try {
+        fs.writeFileSync(path.join(root,'"'"'package.json'"'"'),JSON.stringify(manifest));
+        fs.writeFileSync(path.join(root,'"'"'package-lock.json'"'"'),contents);
+        require('"'"'child_process'"'"').execFileSync('"'"'npm'"'"',['"'"'ci'"'"','"'"'--prefix'"'"',root,'"'"'--ignore-scripts'"'"','"'"'--omit=dev'"'"','"'"'--no-audit'"'"','"'"'--no-fund'"'"','"'"'--fetch-retries=1'"'"','"'"'--fetch-timeout=30000'"'"'],{timeout:150000,stdio:['"'"'ignore'"'"','"'"'pipe'"'"','"'"'pipe'"'"']});
+        const library=require('"'"'module'"'"').createRequire(path.join(root,'"'"'package.json'"'"'));
+        library('"'"'mathjax-full/js/mathjax.js'"'"'); library('"'"'sharp'"'"');
+        fs.writeFileSync(ready,'"'"'Installed from the embedded integrity-checked lockfile.'"'"');
+      } finally { fs.rmdirSync(mutex); }
+    }
+    if(!fs.existsSync(ready))throw Error('"'"'Math renderer installation is still pending; refresh to retry.'"'"');
+  }
+  return require('"'"'module'"'"').createRequire(path.join(root,'"'"'package.json'"'"'));
+}
+
+async function renderProblem(problem) {
+  const library=await libraries();
+const fs=require('"'"'fs'"'"');
+const path=require('"'"'path'"'"');
+const crypto=require('"'"'crypto'"'"');
+const {mathjax}=library('"'"'mathjax-full/js/mathjax.js'"'"');
+const {TeX}=library('"'"'mathjax-full/js/input/tex.js'"'"');
+const {SVG}=library('"'"'mathjax-full/js/output/svg.js'"'"');
+const {liteAdaptor}=library('"'"'mathjax-full/js/adaptors/liteAdaptor.js'"'"');
+const {RegisterHTMLHandler}=library('"'"'mathjax-full/js/handlers/html.js'"'"');
+const {AllPackages}=library('"'"'mathjax-full/js/input/tex/AllPackages.js'"'"');
+const sharp=library('"'"'sharp'"'"');
+const adaptor=liteAdaptor(); RegisterHTMLHandler(adaptor);
+const document=mathjax.document('"'"''"'"',{InputJax:new TeX({packages:AllPackages}),OutputJax:new SVG({fontCache:'"'"'none'"'"'})});
+const dir=path.join(require('"'"'os'"'"').homedir(),'"'"'.cache/daily-learning/equations'"'"'); fs.mkdirSync(dir,{recursive:true});
+
+  if(!problem.rawTex) return;
+  const parts=[];
+  for(const [text,title] of [[problem.title,true],[problem.body,false]]){
+    const regex=/\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)/g;
+    let start=0;
+    for(const match of text.matchAll(regex)){
+      const before=text.slice(start,match.index).trim(); if(before)parts.push({text:before,title});
+      const tex=match.slice(1).find(x=>x!==undefined);
+      const node=document.convert(tex,{display:true});
+      if(adaptor.outerHTML(node).includes('"'"'data-mjx-error'"'"')) throw Error('"'"'Invalid TeX in source equation'"'"');
+      const svg=adaptor.firstChild(node);
+      const box=adaptor.getAttribute(svg,'"'"'viewBox'"'"').split(/\s+/).map(Number);
+      const width=Math.ceil(box[2]/1000*18+20), height=Math.ceil(box[3]/1000*18+16);
+      adaptor.setAttribute(svg,'"'"'width'"'"',String(width));adaptor.setAttribute(svg,'"'"'height'"'"',String(height));
+      // Transparent glyph mask; OWL tints it with the live theme foreground.
+      let xml=adaptor.outerHTML(svg).replace(/currentColor/g,'"'"'#ffffff'"'"');
+      const image=path.join(dir,crypto.createHash('"'"'sha256'"'"').update(xml).digest('"'"'hex'"'"').slice(0,24)+'"'"'.png'"'"');
+      if(!fs.existsSync(image))await sharp(Buffer.from(xml),{density:192}).png().toFile(image);
+      parts.push({image,width,height,tex}); start=match.index+match[0].length;
+    }
+    const tail=text.slice(start).trim();if(tail)parts.push({text:tail,title});
+  }
+  problem.parts=parts;
+
+}
+
+(async()=>{
+const [word,problem]=await Promise.all([
+cached('"'"'word'"'"',async()=>{const xml=await get('"'"'https://www.merriam-webster.com/wotd/feed/rss2'"'"');const item=xml.match(/<item>([\s\S]*?)<\/item>/)?.[1];if(!item)throw Error('"'"'No word in feed'"'"');const tag=n=>item.match(new RegExp('"'"'<'"'"'+n+'"'"'[^>]*>([\\s\\S]*?)<\/'"'"'+n+'"'"'>'"'"'))?.[1]||'"'"''"'"';const desc=tag('"'"'description'"'"').replace(/<!\[CDATA\[|\]\]>/g,'"'"''"'"');const short=tag('"'"'merriam:shortdef'"'"');let body=plain(short||desc);if(!short)body=body.split(/Did You Know\?/i)[0].replace(/^Merriam-Webster'"'"'s Word of the Day[^\n]*\n+/,'"'"''"'"');return {title:plain(tag('"'"'title'"'"')),body:body.split(/\s+/).slice(0,100).join('"'"' '"'"'),url:plain(tag('"'"'link'"'"')),published:plain(tag('"'"'pubDate'"'"')),source:'"'"'Merriam-Webster'"'"'};}),
+cached('"'"'math'"'"',async()=>{const topics=['"'"'geometry'"'"','"'"'multivariable-calculus'"'"','"'"'linear-algebra'"'"','"'"'geometry'"'"','"'"'ordinary-differential-equations'"'"','"'"'integration'"'"','"'"'optimization'"'"'];const day=Math.floor(Date.parse(date+'"'"'T00:00:00Z'"'"')/86400000);const topic=topics[day%topics.length];const api='"'"'https://api.stackexchange.com/2.3/questions?site=math&pagesize=100&order=desc&sort=votes&min=5&tagged='"'"'+encodeURIComponent(topic)+'"'"'&filter=withbody'"'"';const j=JSON.parse(await get(api));if(j.error_message)throw Error(j.error_message);let pool=(j.items||[]).filter(x=>x.accepted_answer_id&&x.body.length<7000&&/find|calculat|determin|prove|evaluat|area|volume|integral|solve/i.test(x.title));if(topic==='"'"'geometry'"'"'){const illustrated=pool.filter(x=>/<img /i.test(x.body));if(illustrated.length)pool=illustrated;}if(!pool.length)throw Error('"'"'No matching problems'"'"');const q=pool[Math.floor(day/7)%pool.length];const images=[...q.body.matchAll(/<img[^>]+src="(https:[^"]+)"/g)].map(x=>decode(x[1])).slice(0,3);return {rawTex:true,title:math(q.title),body:math(q.body),images,url:q.link,id:q.question_id,author:decode(q.owner?.display_name||'"'"'Community contributor'"'"'),topic,source:'"'"'Mathematics Stack Exchange'"'"',license:q.content_license||'"'"'CC BY-SA'"'"',published:new Date(q.creation_date*1000).toISOString().slice(0,10)};})]);
+try { await renderProblem(problem); }
+catch(e) { problem.error='"'"'Could not render equations: '"'"'+e.message; problem.parts=[{text:problem.title||'"'"'Loading problem…'"'"',title:true},{text:problem.body||'"'"'Connect to the internet to load the source.'"'"'}]; }
+console.log(JSON.stringify({word,problem}));
+})().catch(e=>{console.log(JSON.stringify({error:e.message}));process.exitCode=0});' """ + sh(date)) every 1h json timeout 210s
+  let word = data.word
+  let problem = data.problem
+  on date { refresh() }
+  Column {
+    fill: true
+    gap: 14
+    padding: [20, 16]
+      Column {
+        weight: 1
+        fill: width
+        scroll: true
+        gap: 18
+        Text { text: "DAILY / LEARNING"; fontSize: 12; letterSpacing: 3; color: accent }
+        Text { text: fmtTime(now, "EEEE, d MMMM"); fontSize: 23; font: serif }
+        Column {
+          fill: width
+          gap: 12
+          padding: 20
+          background: alpha(surface, 0.85)
+          border: 1
+          borderColor: alpha(accent, 0.3)
+          radius: 20
+          Text { text: "01   WORD OF THE DAY"; fontSize: 11; letterSpacing: 2; color: accent }
+          Text { text: word.title ?? "Fetching today's word…"; font: serif; fontSize: 32 }
+          Text { text: word.body ?? "Connect to the internet to load the publisher's word."; fontSize: 16 }
+          Text { text: "Merriam-Webster · ${word.published ?? "loading"}"; fontSize: 11; color: muted }
+          if word.error { Text { text: word.error; fontSize: 12; color: yellow } }
+          Button { text: "Word entry in browser ↗"; onTap: url(word.url ?? "https://www.merriam-webster.com/word-of-the-day") }
+        }
+        Column {
+          fill: width
+          gap: 14
+          padding: 20
+          background: alpha(surface, 0.85)
+          border: 1
+          borderColor: alpha(blue, 0.35)
+          radius: 20
+          Text { text: "02   DAILY MATH SELECTION"; fontSize: 11; letterSpacing: 2; color: blue }
+          Text { text: problem.topic ?? "Fetching…"; fontSize: 13; color: accent }
+          if !problem.parts { Text { text: "Preparing typeset problem…"; fontSize: 16 } }
+          for part in problem.parts ?? [] {
+            if part.image {
+              Image { src: part.image; width: min(part.width, tileWidth - 72); height: part.height * min(1, (tileWidth - 72) / part.width); fit: contain; label: part.tex; tint: foreground; radius: 6 }
+            } else {
+              Text { text: part.text; fontSize: part.title ? 21 : 16; font: serif }
+            }
+          }
+          for picture in problem.images ?? [] {
+            Image { src: picture; fill: width; height: 240; fit: contain; label: "Original problem diagram"; background: #ffffff; radius: 8 }
+          }
+          Text { text: "By ${problem.author ?? "…"} · Mathematics Stack Exchange\n${problem.license ?? ""} · selected ${problem.checked ?? "…"}"; fontSize: 11; color: muted }
+          Text { text: "Equations typeset locally with MathJax."; fontSize: 12; color: muted }
+          if problem.error { Text { text: problem.error; fontSize: 12; color: yellow } }
+          Button { text: "Solution in browser ↗"; onTap: url(problem.url ?? "https://math.stackexchange.com/") }
+        }
+        Button { text: "Refresh from websites"; onTap: refresh() }
+        Text { text: "Published content · saved locally for offline reading\nMath is selected daily from the archive."; fontSize: 11; color: muted; align: center }
+      }
+    Spacer { height: screenInset }
+  }
+}
