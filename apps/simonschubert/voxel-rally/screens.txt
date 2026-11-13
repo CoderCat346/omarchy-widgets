@@ -8,5 +8,5 @@ still = true; env = 0; mode = "race"; gt = 50; t0 = 12; laps = []; px = -77.174;
 still = true; mode = "garage"; tab = "style"; gt = 1.4; coins = 4200; look = {"paint":3,"stripe":2,"spoiler":3,"rim":3}; owned = ["paint3","stripe2","spoiler3","rim3"]; lv = {"eng":2,"turbo":1,"tires":0}
 # The finish: a win, a new best time, and the coins it pays.
 still = true; env = 0; mode = "done"; gt = 50; px = -77.174; pz = 98.625; ph = -118.755; camH = -118.755; pvx = 0; pvz = 0; place = 1; finT = 91.16; laps = [30.12, 29.8, 31.24]; earned = 500; newBest = true; best = {"circuit":91.16}; coins = 4700; rivals = [{"s":358,"lane":-3,"v":30,"k":0.99,"c":1,"fin":null},{"s":352,"lane":2,"v":30,"k":0.94,"c":2,"fin":null},{"s":349,"lane":-2,"v":30,"k":0.9,"c":3,"fin":null}]
-# The red canyon's grid at sunset.
-still = true; mode = "menu"; env = 2; gt = 2; coins = 4700; best = {"circuit":91.16}
+# Night City's grid, opened by podiums on the tracks before it.
+still = true; mode = "menu"; env = 4; gt = 2; coins = 4700; best = {"circuit":91.16,"forest":95.4,"desert":98.02,"snow":104.6}; podium = {"circuit":1,"forest":1,"desert":2,"snow":3}

@@ -1,5 +1,5 @@
 app "voxel rally" {
-  meta { owl: 22; description: "A 3D voxel racer: tilt the phone to steer, hold gas and brake, and race three rivals over three laps of a circuit, a pine forest, a red canyon and a snowy pass"; version: "1.0"; license: "MIT"; category: "games" }
+  meta { owl: 22; description: "A 3D voxel racer: tilt the phone to steer, hold gas and brake, and race three rivals over eight tracks from a sunny circuit to a night city, jumps over a canyon, a glacier and a volcano, each harder than the last"; version: "1.1"; license: "MIT"; category: "games" }
   // How it works: each track is a loop of 120 points round the middle of its world, from a radius that rises and
   // falls with a few sine waves (so it never crosses itself). The road, its curbs, the fences and the start line
   // are meshes built from those points once per track; the trees, rocks and mountains are boxes, put together into
@@ -41,6 +41,10 @@ app "voxel rally" {
   // the best race and lap times by track id
   state best = {} persist
   state bestLap = {} persist
+  // the best place on each track, by id: a podium opens the next
+  state podium = {} persist
+  // the track a podium just opened, for the finish to say
+  state opened = ""
   state gt = 0
   // when the race starts (gt)
   state t0 = 0
@@ -81,6 +85,15 @@ app "voxel rally" {
   state msgAt = -100
   // Smoke, dust and sparks off the rear wheels: {x, y, z, vx, vy, vz, t (age), l (life), k ("s" smoke, "p" spark)}.
   state fx = []
+  // Off a ramp: how high the car is and how fast it rises, whether it's flying or climbing a ramp; until when a boost
+  // pad drives it on and a slick patch has it sliding; and when it last landed.
+  state py = 0
+  state pvy = 0
+  state air = false
+  state onRamp = false
+  state boostT = -100
+  state slickT = -100
+  state landT = -100
   // bumped to start a race
   state go = 0
   // set by the store's screenshots (screens.txt) to hold a scene still while it's drawn in each theme
@@ -118,24 +131,52 @@ app "voxel rally" {
   let INK = #1b1b1e
   let GOLD = #ffd34a
 
-  let ENVS = [
+  // The tracks, easiest first: the first four are open from the start, each after them opens with a podium on the one
+  // before. A track is a world (its colors and scenery) and a layout (a radius waving with a few sines), a tier of
+  // difficulty (tighter, narrower, faster rivals), and its tricks: jump ramps across the road at points, boost pads
+  // and slick patches (oil, ice, tar) at [point, lane]. `off` turns where the loop starts, so the start and the grid
+  // are on a straight.
+  let ENV0 = [
     {id: "circuit", name: "Grand Circuit", sub: "asphalt, grippy", R: 130, sx: 1.35, a1: 0.18, p1: 0, a2: 0.1, p2: 1.2, a3: 0.05, p3: 0.4, hw: 7,
       dust: #e4e6ea, sky: #8ec9ee, top: #3f8fd8, sun: #fff4c2, sunDir: [-0.7, 0.2, 0.68], far: #4f9a3f, g1: #5fb04a, g2: #57a544, road: #4a4d55, road2: #52555d, curb: [#e0393b, #f2f2f2], fence: [#e0393b, #f2f2f2], dash: true,
       gate: #2a2d35, gate2: #e0393b, grip: 0.0008, gripOff: 0.02, offTop: 0.55, lat: 34,
-      kinds: ["tree", "tree", "tree", "bush", "bush", "tires", "rock"], m1: #4d8f45, m1t: #5aa04f, cap: #5aa04f, capK: 9, mh: 0.5, mesa: false},
+      kinds: ["tree", "tree", "tree", "bush", "bush", "tires", "rock"], m1: #4d8f45, m1t: #5aa04f, cap: #5aa04f, capK: 9, mh: 0.5, mesa: false,
+      skyline: [#8a9bb8, #a7b4c8, #7d8ba6], skylineT: #c8d2e0},
     {id: "forest", name: "Pine Forest", sub: "dirt, slides a bit", R: 140, sx: 1.1, a1: 0.12, p1: 0.8, a2: 0.18, p2: 2.1, a3: 0.08, p3: 1.0, hw: 6,
       dust: #8b6a45, sky: #a9d3c0, top: #5d9c8c, sun: #fff0c8, sunDir: [0.62, 0.17, -0.76], far: #2f5a2b, g1: #3f7a35, g2: #3a7131, road: #8b6a45, road2: #84643f, curb: [#6e5236, #5d452c], fence: [#7a5a38, #6a4c2e], dash: false,
       gate: #6a4c2e, gate2: #3d8040, grip: 0.012, gripOff: 0.03, offTop: 0.55, lat: 28,
       kinds: ["pine", "pine", "pine", "pine", "pine", "rock", "bush", "mush"], m1: #3b5f45, m1t: #456c50, cap: #eef3f7, capK: 3, mh: 1.1, mesa: false},
-    {id: "desert", name: "Red Canyon", sub: "sand, fast and wide", R: 150, sx: 1.25, a1: 0.22, p1: 2.0, a2: 0.08, p2: 0.5, a3: 0.06, p3: 1.7, hw: 7,
+    {id: "desert", tier: 1, name: "Red Canyon", sub: "sand, fast and wide", R: 150, sx: 1.25, a1: 0.22, p1: 2.0, a2: 0.08, p2: 0.5, a3: 0.06, p3: 1.7, hw: 7,
       dust: #e8b47c, sky: #f4cf9a, top: #d8743e, sun: #fff2b8, sunDir: [0.78, 0.11, 0.6], far: #c9874f, g1: #e2a866, g2: #dba060, road: #b06a3e, road2: #a8643a, curb: [#7a3e22, #f0d9b0], fence: [#8a5a3a, #6a4428], dash: false,
       gate: #7a3e22, gate2: #f0d9b0, grip: 0.004, gripOff: 0.02, offTop: 0.6, lat: 30,
       kinds: ["cactus", "cactus", "cactus", "rock", "rock", "mesa", "scrub"], m1: #b45a32, m1t: #c7703f, cap: #c7703f, capK: 9, mh: 0.9, mesa: true},
     {id: "snow", name: "Frost Pass", sub: "snow, slippery", R: 135, sx: 1, a1: 0.15, p1: 1.4, a2: 0.15, p2: 0.3, a3: 0.07, p3: 2.5, hw: 6.5,
       dust: #ffffff, sky: #dbe7f2, top: #8fb2d6, sun: #ffffff, sunDir: [-0.52, 0.26, -0.8], far: #e9f0f7, g1: #f3f7fb, g2: #e6eef6, road: #a9b9cb, road2: #b3c2d3, curb: [#d23a3a, #f4f7fb], fence: [#3a6fb0, #f4f7fb], dash: false,
       gate: #3a6fb0, gate2: #f4f7fb, grip: 0.09, gripOff: 0.15, offTop: 0.65, lat: 20,
-      kinds: ["spine", "spine", "spine", "spine", "rock", "ice", "snowman"], m1: #8ea4b8, m1t: #9cb1c4, cap: #f4f8fc, capK: 2, mh: 1.2, mesa: false}
+      kinds: ["spine", "spine", "spine", "spine", "rock", "ice", "snowman"], m1: #8ea4b8, m1t: #9cb1c4, cap: #f4f8fc, capK: 2, mh: 1.2, mesa: false, tier: 1}
   ]
+  let ENV1 = [
+    {id: "city", name: "Night City", sub: "neon streets", R: 135, sx: 1.15, a1: 0.06, p1: 0.3, a2: 0.05, p2: 1.0, a3: 0.04, p3: 0.2, a4: 0.16, p4: 0, off: 52, hw: 7,
+      dust: #9aa0b5, sky: #1c2150, top: #060918, haze: #2b3062, cloud: #2a2f55, sun: #e8ecff, sunDir: [-0.45, 0.32, 0.83], far: #191c26, g1: #262a35, g2: #21252f, road: #3a3e4a, road2: #424654, curb: [#ff3fa4, #2a2d36], fence: [#3ce0ff, #1d2030], dash: true,
+      gate: #1d2030, gate2: #ff3fa4, grip: 0.0015, gripOff: 0.03, offTop: 0.55, lat: 32,
+      kinds: ["tower", "tower", "tower", "lamp", "lamp", "neon"], m1: #1b1f33, m1t: #262b45, cap: #262b45, capK: 9, mh: 0.35, mesa: false,
+      skyline: [#2a2f55, #323866, #252a4c], skylineT: #ffd36a, cityC: [#22284a, #2a2f55, #1c2140], cityT: #ffd36a,
+      tier: 2, feat: "boost pads", boosts: [[84, -2.5], [6, -2.5], [30, 2.5], [38, -2.5]], oil: [[48, 0]]},
+    merge(ENV0[2], {id: "mesa", name: "Mesa Leap", sub: "over the canyon", R: 155, sx: 1.3, a1: 0.2, p1: 2.6, a2: 0.1, p2: 0.9, a3: 0.07, p3: 2.2, a4: 0.04, p4: 1.0, off: 24, lat: 32,
+      tier: 2, feat: "jumps", ramps: [108, 4, 34, 76], boosts: [[105, 0]]}),
+    merge(ENV0[3], {id: "glacier", name: "Glacier Slide", sub: "narrow and icy", R: 130, sx: 1.05, a1: 0.14, p1: 0.5, a2: 0.16, p2: 1.9, a3: 0.09, p3: 0.7, a4: 0.06, p4: 2.4, off: 92, hw: 5.5, grip: 0.12,
+      tier: 3, feat: "ice, a jump", slick: #bfe8ff, ramps: [12], boosts: [[6, 0]], oil: [[44, -1.5], [56, 1.5], [80, 0]]}),
+    {id: "volcano", name: "Volcano Run", sub: "lava fields", R: 145, sx: 1.2, a1: 0.16, p1: 1.6, a2: 0.12, p2: 0.2, a3: 0.1, p3: 1.3, a4: 0.08, p4: 0.4, off: 24, hw: 6.5,
+      dust: #6a5f5a, sky: #7a3420, top: #2a100c, haze: #8a4a34, cloud: #4a3a36, sun: #ffb070, sunDir: [0.6, 0.15, 0.75], far: #2a2422, g1: #2f2a28, g2: #292422, road: #232326, road2: #2a2a2e, curb: [#ff6a1a, #1b1b1e], fence: [#ff6a1a, #3a3432], dash: false,
+      gate: #1b1b1e, gate2: #ff6a1a, grip: 0.004, gripOff: 0.03, offTop: 0.5, lat: 30,
+      kinds: ["boulder", "boulder", "deadtree", "lava", "lava", "vent"], m1: #2a2422, m1t: #3a3230, cap: #ff7a2a, capK: 3, mh: 1.4, mesa: false,
+      tier: 3, feat: "jumps, boosts, tar", slick: #0d0d0f, ramps: [110, 16, 36], boosts: [[106, 2], [6, -2], [53, 0]], oil: [[74, -2], [84, 2], [26, 0]]}
+  ]
+  let ENVS = (ENV0 + ENV1).map(e => merge({off: 0, tier: 0, feat: "", a4: 0, p4: 0, ramps: [], boosts: [], oil: [], slick: #15161a, haze: null, cloud: #f4f8fc, skyline: null, cityC: [#22284a], cityT: #ffd36a}, e))
+  let TIERS = ["EASY", "MEDIUM", "HARD", "EXPERT"]
+  let TIERC = [#5cdc5a, #ffd34a, #ff8a2a, #ff4a5a]
+  // which tracks are open: the first four always, the rest after a podium (top three) on the one before
+  let OPEN = ENVS.map((e, i) => i < 4 || (podium[ENVS[i - 1].id] ?? 9) <= 3)
   let E = ENVS[env]
   let HW = E.hw
   // where the fences stand, either side of the middle, and how far out the car can go
@@ -144,7 +185,7 @@ app "voxel rally" {
   // The light comes from the sun's side; the far land and the fog fade into a bright haze at the horizon, the bottom of
   // the sky's gradient, so the world has no edge.
   let LIGHT = [E.sunDir[0], 1.2, E.sunDir[2]]
-  let HAZE = mix(E.sky, #ffffff, 0.35)
+  let HAZE = E.haze ?? mix(E.sky, #ffffff, 0.35)
 
   // A box: eight corners of a unit box standing on y 0, and its faces (top, then the sides), counterclockwise seen
   // from outside. Boxes are {x, y, z, w, h, d, c (sides), t (top)}.
@@ -153,12 +194,12 @@ app "voxel rally" {
 
   // The track: N points, each with its unit tangent (tx, tz), its right (nx, nz), its heading h, and the step to the
   // next point (ex, ez, len, its heading hs and how much the heading turns into the next, dh).
-  let RAWP = range(N).map(i => [2 * pi * i / N].map(a => [a, E.R * (1 + E.a1 * sin(2 * a + E.p1) + E.a2 * sin(3 * a + E.p2) + E.a3 * sin(5 * a + E.p3))])[0]).map(q => [cos(q[0]) * q[1] * E.sx, sin(q[0]) * q[1]])
+  let RAWP = range(N).map(i => [2 * pi * (i + E.off) / N].map(a => [a, E.R * (1 + E.a1 * sin(2 * a + E.p1) + E.a2 * sin(3 * a + E.p2) + E.a3 * sin(5 * a + E.p3) + E.a4 * sin(4 * a + E.p4))])[0]).map(q => [cos(q[0]) * q[1] * E.sx, sin(q[0]) * q[1]])
   let T0 = range(N).map(i => [[RAWP[i], RAWP[(i + 1) % N], RAWP[(i + N - 1) % N]]].map(q => [sqrt(pow(q[1][0] - q[2][0], 2) + pow(q[1][1] - q[2][1], 2))].map(l => {i: i, x: q[0][0], z: q[0][1], tx: (q[1][0] - q[2][0]) / l, tz: (q[1][1] - q[2][1]) / l, ex: q[1][0] - q[0][0], ez: q[1][1] - q[0][1]})[0])[0])
   let T1 = T0.map(a => merge(a, {nx: -a.tz, nz: a.tx, h: deg(atan2(a.tx, a.tz)), l2: a.ex * a.ex + a.ez * a.ez, len: sqrt(a.ex * a.ex + a.ez * a.ez), hs: deg(atan2(a.ex, a.ez))}))
   let T = T1.map(a => merge(a, {dh: ((T1[(a.i + 1) % N].hs - a.hs + 540) % 360) - 180}))
   // How fast a bend can be taken, and that looking a few segments ahead: what the rivals aim for.
-  let SPD = T.map(a => [abs(a.dh) / a.len * pi / 180].map(c => c < 0.0001 ? TOP : min(TOP * 0.98, sqrt(E.lat / c)))[0])
+  let SPD = T.map(a => [abs(a.dh) / a.len * pi / 180].map(c => c < 0.0001 ? TOP : min(TOP * 0.98, sqrt(E.lat * (1 + 0.12 * E.tier) / c)))[0])
   let SPDA = range(N).map(i => min(range(6).map(k => SPD[(i + k) % N])))
   // The track squeezed into 0..1 for the little map.
   let MINX = min(T.map(a => a.x))
@@ -178,6 +219,12 @@ app "voxel rally" {
   // A fence each side, a strip standing up; seen from both sides.
   // Three panels a segment, so each sorts near where it stands (there's no depth buffer).
   let FENCE = [-1, 1].map(sd => mesh(flatten(flatten(T.map(a => [[a, T[(a.i + 1) % N]]].map(ab => range(3).map(k => [ab[0].x + ab[0].ex * k / 3 + lerp(ab[0].nx, ab[1].nx, k / 3) * FO * sd, ab[0].z + ab[0].ez * k / 3 + lerp(ab[0].nz, ab[1].nz, k / 3) * FO * sd]))[0])).map(q => [[q[0], 0, q[1]], [q[0], 1.1, q[1]]])), range(3 * N).map(i => [2 * i, (2 * i + 2) % (6 * N), (2 * i + 3) % (6 * N), 2 * i + 1]), range(3 * N).map(i => E.fence[floor(i / 3) % 2])))
+  // The tricks: a ramp across the road and its curbs, rising 1.1 over 3.6 toward the way round; boost pads of three
+  // glowing strips; slick patches (oil, ice or tar) as octagons. null where a track has none.
+  let RW = HW + 1.6
+  let RAMPM = len(E.ramps) == 0 ? null : mesh(flatten(E.ramps.map(r => [T[r]].map(a => [[a.x - a.nx * RW, 0.02, a.z - a.nz * RW], [a.x + a.nx * RW, 0.02, a.z + a.nz * RW], [a.x + a.nx * RW + a.tx * 3.6, 1.1, a.z + a.nz * RW + a.tz * 3.6], [a.x - a.nx * RW + a.tx * 3.6, 1.1, a.z - a.nz * RW + a.tz * 3.6], [a.x + a.nx * RW + a.tx * 3.6, 0, a.z + a.nz * RW + a.tz * 3.6], [a.x - a.nx * RW + a.tx * 3.6, 0, a.z - a.nz * RW + a.tz * 3.6]])[0])), flatten(range(len(E.ramps)).map(k => [6 * k].map(o => [[o, o + 1, o + 2, o + 3], [o + 3, o + 2, o + 4, o + 5], [o, o + 3, o + 5], [o + 1, o + 4, o + 2]])[0])), flatten(E.ramps.map(r => [#f2c230, #1b1b1e, #2a2a2e, #2a2a2e])))
+  let PADM = len(E.boosts) == 0 ? null : mesh(flatten(E.boosts.map(bp => [T[bp[0]]].map(a => flatten(range(3).map(k => [[-1.2, k * 1.1], [1.2, k * 1.1], [1.2, k * 1.1 + 0.9], [-1.2, k * 1.1 + 0.9]].map(c => [a.x + a.nx * (bp[1] + c[0]) + a.tx * c[1], 0.07, a.z + a.nz * (bp[1] + c[0]) + a.tz * c[1]]))))[0])), range(3 * len(E.boosts)).map(k => [4 * k, 4 * k + 1, 4 * k + 2, 4 * k + 3]), flatten(E.boosts.map(bp => [#3ce0ff, #8af0ff, #3ce0ff])))
+  let SLICKM = len(E.oil) == 0 ? null : mesh(flatten(E.oil.map(o => [T[o[0]]].map(a => range(8).map(k => [a.x + a.nx * (o[1] + cos(k * pi / 4) * 2.1) + a.tx * sin(k * pi / 4) * 2.1, 0.06, a.z + a.nz * (o[1] + cos(k * pi / 4) * 2.1) + a.tz * sin(k * pi / 4) * 2.1]))[0])), range(len(E.oil)).map(k => range(8).map(j => 8 * k + j)), E.oil.map(o => E.slick))
 
   // The ground: a checker of two greens (or sands, or snows), 14 cells of 46 a side.
   let GROUND = terrain(range(15).map(r => range(15).map(c => 0)), range(14).map(r => range(14).map(c => hash(r, c, E.id) < 0.5 ? E.g1 : E.g2)))
@@ -227,13 +274,37 @@ app "voxel rally" {
     ] : (v[3] == "ice" ? [
       {x: v[0], y: 0, z: v[1], w: 2.4 * v[2], h: 1.6 * v[2], d: 2 * v[2], c: #a9d6ec, t: #e6f6fc},
       {x: v[0] + 0.5, y: 1.6 * v[2], z: v[1], w: 1.2 * v[2], h: 1 * v[2], d: 1.1 * v[2], c: #a9d6ec, t: #e6f6fc}
+    ] : (v[3] == "tower" ? [E.cityC[floor(v[2] * 10) % len(E.cityC)]].map(col => [
+      {x: v[0], y: 0, z: v[1], w: 5 * v[2], h: 4 * v[2], d: 5 * v[2], c: col, t: col},
+      {x: v[0], y: 4 * v[2], z: v[1], w: 5 * v[2], h: 0.5, d: 5 * v[2], c: E.cityT, t: E.cityT},
+      {x: v[0], y: 4 * v[2] + 0.5, z: v[1], w: 5 * v[2], h: 4 * v[2], d: 5 * v[2], c: col, t: col},
+      {x: v[0], y: 8 * v[2] + 0.5, z: v[1], w: 5 * v[2], h: 0.5, d: 5 * v[2], c: E.cityT, t: E.cityT},
+      {x: v[0], y: 8 * v[2] + 1, z: v[1], w: 5 * v[2], h: 3 * v[2], d: 5 * v[2], c: col, t: mix(col, #ffffff, 0.15)}
+    ])[0] : (v[3] == "lamp" ? [
+      {x: v[0], y: 0, z: v[1], w: 0.35, h: 5, d: 0.35, c: #555a6a, t: #555a6a, nt: true},
+      {x: v[0], y: 5, z: v[1], w: 1.6, h: 0.35, d: 0.6, c: #fff3b0, t: #fff3b0}
+    ] : (v[3] == "neon" ? [
+      {x: v[0], y: 0, z: v[1], w: 0.4, h: 3, d: 0.4, c: #3a3f52, t: #3a3f52, nt: true},
+      {x: v[0], y: 3, z: v[1], w: 3 * v[2], h: 1.4, d: 0.4, c: v[2] < 1.1 ? #ff3fa4 : #3ce0ff, t: v[2] < 1.1 ? #ff7cc4 : #8af0ff}
+    ] : (v[3] == "boulder" ? [
+      {x: v[0], y: 0, z: v[1], w: 2.8 * v[2], h: 1.6 * v[2], d: 2.4 * v[2], c: #3b3432, t: #4a413e},
+      {x: v[0] + 0.5 * v[2], y: 1.6 * v[2], z: v[1], w: 1.5 * v[2], h: 0.9 * v[2], d: 1.3 * v[2], c: #3b3432, t: #4a413e}
+    ] : (v[3] == "deadtree" ? [
+      {x: v[0], y: 0, z: v[1], w: 0.5, h: 3.2 * v[2], d: 0.5, c: #3a302c, t: #3a302c},
+      {x: v[0] + 0.25 + 0.6 * v[2], y: 2 * v[2], z: v[1], w: 1.2 * v[2], h: 0.35, d: 0.35, c: #3a302c, t: #463a35},
+      {x: v[0] - 0.25 - 0.5 * v[2], y: 2.6 * v[2], z: v[1], w: 1 * v[2], h: 0.35, d: 0.35, c: #3a302c, t: #463a35}
+    ] : (v[3] == "lava" ? [
+      {x: v[0], y: 0, z: v[1], w: 4 * v[2], h: 0.12, d: 3 * v[2], c: #ff6a1a, t: #ffb02e}
+    ] : (v[3] == "vent" ? [
+      {x: v[0], y: 0, z: v[1], w: 2.4 * v[2], h: 1.2 * v[2], d: 2.4 * v[2], c: #3a3230, t: #4a413e},
+      {x: v[0], y: 1.2 * v[2], z: v[1], w: 1.4 * v[2], h: 0.8 * v[2], d: 1.4 * v[2], c: #3a3230, t: #ff7a2a}
     ] : [
       {x: v[0], y: 0, z: v[1], w: 2 * v[2], h: 1.8 * v[2], d: 2 * v[2], c: #f4f7fb, t: #ffffff},
       {x: v[0], y: 1.8 * v[2], z: v[1], w: 1.4 * v[2], h: 1.3 * v[2], d: 1.4 * v[2], c: #f4f7fb, t: #ffffff},
       {x: v[0], y: 3.1 * v[2], z: v[1], w: 1 * v[2], h: 1 * v[2], d: 1 * v[2], c: #f4f7fb, t: #ffffff},
       {x: v[0], y: 3.5 * v[2], z: v[1] + 0.75 * v[2], w: 0.2, h: 0.2, d: 0.5 * v[2], c: #f08a24, t: #f08a24},
       {x: v[0], y: 4.1 * v[2], z: v[1], w: 0.9 * v[2], h: 0.6 * v[2], d: 0.9 * v[2], c: #222226, t: #222226}
-    ]))))))))))[0]))
+    ])))))))))))))))))[0]))
   // A dozen meshes of them by the angle they stand at round the middle, at most 120 boxes each.
   // A box under another (a trunk, a stem, a post) has no top: it would be hidden, and could sort over what hides it.
   let SECT = range(12).map(k => take(BOXES.filter(b => floor((atan2(b.z, b.x) + pi) / (2 * pi) * 12) % 12 == k), 120)).filter(bs => len(bs) > 0).map(bs => mesh(flatten(bs.map(b => CORN.map(c => [b.x + c[0] * b.w / 2, b.y + c[1] * b.h, b.z + c[2] * b.d / 2]))), flatten(bs.map((b, i) => drop(BF, b.nt == true ? 1 : 0).map(f => f.map(k => k + 8 * i)))), flatten(bs.map(b => b.nt == true ? [b.c, b.c, b.c, b.c] : [b.t, b.c, b.c, b.c, b.c]))))
@@ -243,12 +314,12 @@ app "voxel rally" {
   // so the ones behind the camera are skipped, and a few clouds.
   let NEAR = range(32).map(i => [2 * pi * (i + hash(i, E.id, 9) * 0.5) / 32].map(a => {k: floor(i / 6), x: cos(a) * (480 + hash(i, E.id, 10) * 50), z: sin(a) * (480 + hash(i, E.id, 10) * 50), w: 130 + hash(i, E.id, 11) * 70, h: (28 + hash(i, E.id, 12) * 40) * E.mh})[0])
   let NEARB = flatten(NEAR.map(q => range(4).map(k => {k: q.k, x: q.x, y: q.h * k / 4, z: q.z, w: q.w * (1 - k * (E.mesa ? 0.05 : 0.22)), h: q.h / 4, d: q.w * 0.85 * (1 - k * (E.mesa ? 0.05 : 0.22)), c: k >= E.capK ? E.cap : E.m1, t: k >= E.capK - 1 ? E.cap : E.m1t})))
-  let FARB = E.id == "circuit" ? range(64).map(i => [2 * pi * (i + hash(i, 41) * 0.7) / 64].map(a => [cos(a) * (690 + hash(i, 42) * 90), sin(a) * (690 + hash(i, 42) * 90), 22 + hash(i, 43) * 26, 30 + pow(hash(i, 44), 2) * 110]).map(q => {k: floor(i / 11), x: q[0], y: 0, z: q[1], w: q[2], h: q[3], d: q[2], c: mix([#8a9bb8, #a7b4c8, #7d8ba6][i % 3], HAZE, 0.35), t: mix(#c8d2e0, HAZE, 0.35)})[0]) : flatten(range(26).map(i => [2 * pi * (i + hash(i, E.id, 13) * 0.5) / 26].map(a => {k: floor(i / 5), x: cos(a) * (720 + hash(i, E.id, 14) * 60), z: sin(a) * (720 + hash(i, E.id, 14) * 60), w: 240 + hash(i, E.id, 15) * 90, h: (70 + hash(i, E.id, 16) * 80) * E.mh})[0]).map(q => range(4).map(k => {k: q.k, x: q.x, y: q.h * k / 4, z: q.z, w: q.w * (1 - k * (E.mesa ? 0.05 : 0.2)), h: q.h / 4, d: q.w * 0.85 * (1 - k * (E.mesa ? 0.05 : 0.2)), c: mix(k >= E.capK ? E.cap : E.m1, HAZE, 0.45), t: mix(k >= E.capK - 1 ? E.cap : E.m1t, HAZE, 0.45)})))
-  let CLOUDS = flatten(range(14).map(i => [2 * pi * i / 14 + hash(i, 21)].map(a => [cos(a) * (120 + hash(i, 22) * 260), sin(a) * (120 + hash(i, 22) * 260), 70 + hash(i, 23) * 40, 18 + hash(i, 24) * 24])[0]).map(q => [{x: q[0], y: q[2], z: q[1], w: q[3], h: 4, d: q[3] * 0.55, c: #f4f8fc, t: #ffffff}, {x: q[0] + q[3] * 0.1, y: q[2] + 4, z: q[1], w: q[3] * 0.55, h: 3.5, d: q[3] * 0.35, c: #f4f8fc, t: #ffffff}]))
+  let FARB = E.skyline != null ? range(64).map(i => [2 * pi * (i + hash(i, 41) * 0.7) / 64].map(a => [cos(a) * (690 + hash(i, 42) * 90), sin(a) * (690 + hash(i, 42) * 90), 22 + hash(i, 43) * 26, 30 + pow(hash(i, 44), 2) * 110]).map(q => {k: floor(i / 11), x: q[0], y: 0, z: q[1], w: q[2], h: q[3], d: q[2], c: mix(E.skyline[i % 3], HAZE, 0.35), t: mix(E.skylineT, HAZE, 0.35)})[0]) : flatten(range(26).map(i => [2 * pi * (i + hash(i, E.id, 13) * 0.5) / 26].map(a => {k: floor(i / 5), x: cos(a) * (720 + hash(i, E.id, 14) * 60), z: sin(a) * (720 + hash(i, E.id, 14) * 60), w: 240 + hash(i, E.id, 15) * 90, h: (70 + hash(i, E.id, 16) * 80) * E.mh})[0]).map(q => range(4).map(k => {k: q.k, x: q.x, y: q.h * k / 4, z: q.z, w: q.w * (1 - k * (E.mesa ? 0.05 : 0.2)), h: q.h / 4, d: q.w * 0.85 * (1 - k * (E.mesa ? 0.05 : 0.2)), c: mix(k >= E.capK ? E.cap : E.m1, HAZE, 0.45), t: mix(k >= E.capK - 1 ? E.cap : E.m1t, HAZE, 0.45)})))
+  let CLOUDS = flatten(range(14).map(i => [2 * pi * i / 14 + hash(i, 21)].map(a => [cos(a) * (120 + hash(i, 22) * 260), sin(a) * (120 + hash(i, 22) * 260), 70 + hash(i, 23) * 40, 18 + hash(i, 24) * 24])[0]).map(q => [{x: q[0], y: q[2], z: q[1], w: q[3], h: 4, d: q[3] * 0.55, c: E.cloud, t: mix(E.cloud, #ffffff, 0.25)}, {x: q[0] + q[3] * 0.1, y: q[2] + 4, z: q[1], w: q[3] * 0.55, h: 3.5, d: q[3] * 0.35, c: E.cloud, t: mix(E.cloud, #ffffff, 0.25)}]))
   let FARM = range(6).map(k => FARB.filter(b => b.k == k)).filter(bs => len(bs) > 0).map(bs => mesh(flatten(bs.map(b => CORN.map(c => [b.x + c[0] * b.w / 2, b.y + c[1] * b.h, b.z + c[2] * b.d / 2]))), flatten(bs.map((b, i) => BF.map(f => f.map(k => k + 8 * i)))), flatten(bs.map(b => [b.t, b.c, b.c, b.c, b.c]))))
   let BACK = range(6).map(k => NEARB.filter(b => b.k == k)).filter(bs => len(bs) > 0).map(bs => mesh(flatten(bs.map(b => CORN.map(c => [b.x + c[0] * b.w / 2, b.y + c[1] * b.h, b.z + c[2] * b.d / 2]))), flatten(bs.map((b, i) => BF.map(f => f.map(k => k + 8 * i)))), flatten(bs.map(b => [b.t, b.c, b.c, b.c, b.c]))))
   // Clouds are seen from below, so theirs have a bottom too.
-  let CLOUDM = mesh(flatten(CLOUDS.map(b => CORN.map(c => [b.x + c[0] * b.w / 2, b.y + c[1] * b.h, b.z + c[2] * b.d / 2]))), flatten(CLOUDS.map((b, i) => (BF + [[0, 1, 2, 3]]).map(f => f.map(k => k + 8 * i)))), flatten(CLOUDS.map(b => [b.t, b.c, b.c, b.c, b.c, #e8eef6])))
+  let CLOUDM = mesh(flatten(CLOUDS.map(b => CORN.map(c => [b.x + c[0] * b.w / 2, b.y + c[1] * b.h, b.z + c[2] * b.d / 2]))), flatten(CLOUDS.map((b, i) => (BF + [[0, 1, 2, 3]]).map(f => f.map(k => k + 8 * i)))), flatten(CLOUDS.map(b => [b.t, b.c, b.c, b.c, b.c, mix(E.cloud, #000000, 0.08)])))
 
   // The start gantry, and on the circuit a grandstand full of people on the left; in the start's own frame: forward +z, left +x.
   let STANDS = E.id != "circuit" ? [] : flatten(range(4).map(k => [{x: FO + 3.5 + k * 2.2, y: 0, z: 0, w: 2.2, h: 1.2 + k * 1.2, d: 40, c: #7d828c, t: #a9aeb8}] + range(14).map(j => {x: FO + 3.5 + k * 2.2, y: 1.2 + k * 1.2, z: -18 + j * 2.7 + hash(j, k, 31) * 0.8, w: 0.8, h: 0.9 + hash(j, k, 32) * 0.3, d: 0.8, c: CARC[floor(hash(j, k, 33) * 4)], t: #e8c8a0}))) + [{x: FO + 8, y: 7.4, z: 0, w: 11, h: 0.5, d: 42, c: #d8dce4, t: #e0393b}, {x: FO + 12.8, y: 0, z: -19, w: 0.6, h: 7.4, d: 0.6, c: #555a63, t: #555a63}, {x: FO + 12.8, y: 0, z: 19, w: 0.6, h: 7.4, d: 0.6, c: #555a63, t: #555a63}]
@@ -310,6 +381,7 @@ app "voxel rally" {
   // Where the rivals are: along the track by their distance, off the middle by their lane, weaving a little and nudged
   // aside by a bump (b, springing back); with the way they go and how fast, for bumping them.
   let RP = rivals.map(r => [((r.s % N) + N) % N].map(q => [[T[floor(q) % N], q - floor(q), clamp(r.lane + sin(r.s * 0.11 + r.c * 2.1) * 2 + (r.b ?? 0), -HW + 1.2, HW - 1.2)]].map(af => {x: af[0].x + af[0].ex * af[1] + af[0].nx * af[2], z: af[0].z + af[0].ez * af[1] + af[0].nz * af[2], h: af[0].hs + af[0].dh * af[1], c: r.c,
+    y: [first(E.ramps.filter(rr => q >= rr && q < rr + 6))].map(rr => rr == null ? 0 : [(q - rr) * T[rr].len].map(dd => dd < 3.6 ? dd / 3.6 * 1.1 : [(dd - 3.6) / max(5, r.v)].map(tt => max(0, 1.1 + (3 + r.v * 0.2) * tt - 15 * tt * tt))[0])[0])[0],
     s: r.s, v: r.v, bv: r.bv ?? 0, le: af[2], len: af[0].len, tx: af[0].ex / af[0].len, tz: af[0].ez / af[0].len, nx: af[0].nx, nz: af[0].nz})[0])[0])
 
   let chase = mode == "count" || mode == "race" || mode == "done"
@@ -321,7 +393,7 @@ app "voxel rally" {
   let ME = chase ? {x: px, z: pz, h: ph} : [T[N - 2]].map(a => {x: a.x + a.ex * 0.5 + a.nx * 3, z: a.z + a.ez * 0.5 + a.nz * 3, h: a.hs})[0]
   // landscape: on the menu the car sits left of the middle, clear of the panel on the right
   let LANDV = (screenWidth ?? 400) > (screenHeight ?? 800)
-  let cam = chase ? {eye: [px - sin(rad(camH)) * 11.5, 5.2, pz - cos(rad(camH)) * 11.5], look: [px + sin(rad(camH)) * 9, 1.2, pz + cos(rad(camH)) * 9], fov: 56 + spd * 0.2, near: 0.4, far: 1200} : [[0.95 + 0.6 * sin(gt * 0.13), rad(ME.h)]].map(a => {eye: [ME.x + (sin(a[1]) * cos(a[0]) - cos(a[1]) * sin(a[0])) * 12, 2.2, ME.z + (cos(a[1]) * cos(a[0]) + sin(a[1]) * sin(a[0])) * 12], look: [ME.x + (cos(a[1]) * cos(a[0]) + sin(a[1]) * sin(a[0])) * (LANDV ? 6 : 0), 0.3, ME.z - (sin(a[1]) * cos(a[0]) - cos(a[1]) * sin(a[0])) * (LANDV ? 6 : 0)], fov: LANDV ? 42 : 50, near: 0.4, far: 1200})[0]
+  let cam = chase ? {eye: [px - sin(rad(camH)) * 11.5, 5.2 + py * 0.7, pz - cos(rad(camH)) * 11.5], look: [px + sin(rad(camH)) * 9, 1.2 + py, pz + cos(rad(camH)) * 9], fov: 56 + spd * 0.2, near: 0.4, far: 1200} : [[0.95 + 0.6 * sin(gt * 0.13), rad(ME.h)]].map(a => {eye: [ME.x + (sin(a[1]) * cos(a[0]) - cos(a[1]) * sin(a[0])) * 12, 2.2, ME.z + (cos(a[1]) * cos(a[0]) + sin(a[1]) * sin(a[0])) * 12], look: [ME.x + (cos(a[1]) * cos(a[0]) + sin(a[1]) * sin(a[0])) * (LANDV ? 6 : 0), 0.3, ME.z - (sin(a[1]) * cos(a[0]) - cos(a[1]) * sin(a[0])) * (LANDV ? 6 : 0)], fov: LANDV ? 42 : 50, near: 0.4, far: 1200})[0]
 
   let raceT = mode == "race" ? max(0, gt - t0) : (mode == "done" ? finT : 0)
   let lapNo = clamp(len(laps) + 1, 1, LAPS)
@@ -353,9 +425,17 @@ app "voxel rally" {
     lapAt = -100
     newBest = false
     fx = []
+    py = 0
+    pvy = 0
+    air = false
+    onRamp = false
+    boostT = -100
+    slickT = -100
+    opened = ""
     gas = false
     brake = false
-    rivals = [{s: -1.5, lane: -3, v: 0, k: 0.99, c: 1, fin: null}, {s: -1.5, lane: 3, v: 0, k: 0.94, c: 2, fin: null}, {s: -4, lane: -3, v: 0, k: 0.9, c: 3, fin: null}]
+    // on harder tracks the rivals are better drivers
+    rivals = [{s: -1.5, lane: -3, v: 0, k: 0.99 * (1 + 0.035 * E.tier), c: 1, fin: null}, {s: -1.5, lane: 3, v: 0, k: 0.94 * (1 + 0.035 * E.tier), c: 2, fin: null}, {s: -4, lane: -3, v: 0, k: 0.9 * (1 + 0.035 * E.tier), c: 3, fin: null}]
     restX = tilted ? clamp(m.x, -0.35, 0.35) : 0
   }
 
@@ -374,11 +454,15 @@ app "voxel rally" {
         let fz0 = cos(rad(ph))
         let fwd = pvx * fx0 + pvz * fz0
         let lat = pvz * fx0 - pvx * fz0
-        let off = abs(pd) > HW + 1.3
-        let top = PTOP * (off ? E.offTop + OFFK : 1)
-        let f1 = racing && brake ? (fwd > 0.5 ? fwd - 40 * dt : max(-10, fwd - 14 * dt)) : (racing && gas ? (fwd < top ? fwd + PACC * (1 - 0.65 * max(0, fwd) / top) * dt : max(top, fwd - 30 * dt)) : (fwd > top ? max(top, fwd - 30 * dt) : fwd * pow(off ? 0.4 : 0.65, dt)))
-        let l1 = lat * pow((off ? E.gripOff : E.grip) * GRIPK, dt)
-        let nh = ph - sd * 100 * TURNK * clamp(fwd / 8, -1, 1) * (1 - 0.35 * clamp(fwd / PTOP, 0, 1)) * dt
+        let boosting = gt < boostT
+        let slicky = gt < slickT
+        let off = !air && abs(pd) > HW + 1.3
+        let top = PTOP * (off ? E.offTop + OFFK : 1) * (boosting ? 1.3 : 1)
+        let f0 = racing && brake ? (fwd > 0.5 ? fwd - 40 * dt : max(-10, fwd - 14 * dt)) : (racing && gas ? (fwd < top ? fwd + PACC * (1 - 0.65 * max(0, fwd) / top) * dt : max(top, fwd - 30 * dt)) : (fwd > top ? max(top, fwd - 30 * dt) : fwd * pow(off ? 0.4 : 0.65, dt)))
+        // In the air it flies on as it left; a boost pad drives it on past its top speed; on a slick patch it slides.
+        let f1 = air ? fwd : (boosting ? max(f0, min(top, fwd + 38 * dt)) : f0)
+        let l1 = air ? lat : (slicky ? lat * pow(0.55, dt) : lat * pow((off ? E.gripOff : E.grip) * GRIPK, dt))
+        let nh = ph - sd * (air ? 0 : (slicky ? 0.55 : 1)) * 100 * TURNK * clamp(fwd / 8, -1, 1) * (1 - 0.35 * clamp(fwd / PTOP, 0, 1)) * dt
         let vx1 = fx0 * f1 - fz0 * l1
         let vz1 = fz0 * f1 + fx0 * l1
         let ax = px + vx1 * dt
@@ -419,6 +503,38 @@ app "voxel rally" {
         si = b.j
         su = b.u
         prog = np
+        // Tricks: a ramp lifts the car as it climbs and throws it off the top, higher the faster it went; it comes down
+        // under gravity. Driving over a boost pad drives it on for a moment; over a slick patch, it slides.
+        let rampHere = first(E.ramps.filter(r => r == b.j && b.u * T[r].len < 3.6 && abs(d) < HW + 1.6))
+        if air {
+          let ny = py + pvy * dt
+          py = max(0, ny)
+          pvy = pvy - 30 * dt
+          if ny <= 0 {
+            air = false
+            pvy = 0
+            landT = gt
+          }
+        } else {
+          if rampHere != null && f1 > 3 {
+            py = b.u * T[rampHere].len / 3.6 * 1.1
+            onRamp = true
+          } else {
+            if onRamp && py > 0.5 && f1 > 3 {
+              air = true
+              pvy = 3 + f1 * 0.2
+            } else {
+              py = 0
+            }
+            onRamp = false
+          }
+          if any(E.boosts, q => q[0] == b.j && b.u * T[b.j].len < 3.4 && abs(d - q[1]) < 1.5) {
+            boostT = gt + 1.3
+          }
+          if any(E.oil, q => abs((b.j + b.u - q[0]) * T[b.j].len) < 2.1 && abs(d - q[1]) < 2.1) {
+            slickT = gt + 0.9
+          }
+        }
         // A lap: the line crossed for a lap not yet timed.
         if racing && floor(np / N) > len(laps) {
           let lt = gt - t0 - sum(laps)
@@ -434,8 +550,11 @@ app "voxel rally" {
             finT = gt - t0
             place = pl
             newBest = nb
-            earned = PRIZE[pl - 1] + (nb ? 100 : 0)
-            coins = coins + PRIZE[pl - 1] + (nb ? 100 : 0)
+            // harder tracks pay more: half as much again per tier
+            earned = round(PRIZE[pl - 1] * (1 + 0.5 * E.tier)) + (nb ? 100 : 0)
+            coins = coins + round(PRIZE[pl - 1] * (1 + 0.5 * E.tier)) + (nb ? 100 : 0)
+            opened = pl <= 3 && env + 1 < len(ENVS) && !OPEN[env + 1] ? ENVS[env + 1].name : ""
+            podium = set(podium, E.id, min(podium[E.id] ?? 9, pl))
             if best[E.id] == null || gt - t0 < best[E.id] {
               best = set(best, E.id, gt - t0)
             }
@@ -444,14 +563,14 @@ app "voxel rally" {
         // Smoke and dust off the rear wheels: a light trail that grows with speed, more in a slide, a wheelspin, hard
         // braking or off the road; sparks from 60% of top speed on, more toward it, and a burst against a fence or a rival. At most 40 at a time.
         let fspd = abs(f1)
-        let smokeRate = fspd / PTOP * 8 + (abs(l1) > 2 ? abs(l1) * 5 : 0) + (racing && gas && f1 < 14 && f1 > 0.5 ? 12 : 0) + (racing && brake && f1 > 8 ? 22 : 0) + (off && fspd > 3 ? fspd * 0.7 : 0)
-        let sparkRate = (wall && fspd > 4 ? 90 : 0) + (knock > 1.5 ? 70 : 0) + (any(CJ, c => c != null) ? 8 : 0) + (f1 > PTOP * 0.6 ? (f1 / PTOP - 0.6) * 80 : 0)
+        let smokeRate = fspd / PTOP * 8 + (abs(l1) > 2 ? abs(l1) * 5 : 0) + (racing && gas && f1 < 14 && f1 > 0.5 ? 12 : 0) + (racing && brake && f1 > 8 ? 22 : 0) + (off && fspd > 3 ? fspd * 0.7 : 0) + (gt - landT < 0.12 ? 160 : 0)
+        let sparkRate = (wall && fspd > 4 ? 90 : 0) + (knock > 1.5 ? 70 : 0) + (any(CJ, c => c != null) ? 8 : 0) + (f1 > PTOP * 0.6 ? (f1 / PTOP - 0.6) * 80 : 0) + (boosting ? 60 : 0)
         let ns = floor(smokeRate * dt + random())
         let np2 = floor(sparkRate * dt + random())
         let born = range(ns + np2).map(i => [[i < ns ? "s" : "p", random() < 0.5 ? 1.05 : -1.05, random()]].map(q => {
-          x: px + q[1] * cos(rad(ph)) - 1.5 * sin(rad(ph)), y: 0.25, z: pz - q[1] * sin(rad(ph)) - 1.5 * cos(rad(ph)),
+          x: px + q[1] * cos(rad(ph)) - 1.5 * sin(rad(ph)), y: 0.25 + py, z: pz - q[1] * sin(rad(ph)) - 1.5 * cos(rad(ph)),
           vx: pvx * 0.35 + (random() - 0.5) * (q[0] == "s" ? 2 : 7), vy: q[0] == "s" ? 0.8 + random() * 1.2 : 2 + random() * 4, vz: pvz * 0.35 + (random() - 0.5) * (q[0] == "s" ? 2 : 7),
-          t: 0, l: q[0] == "s" ? 0.7 + q[2] * 0.5 : 0.3 + q[2] * 0.3, k: q[0]})[0])
+          t: 0, l: q[0] == "s" ? 0.7 + q[2] * 0.5 : 0.3 + q[2] * 0.3, k: q[0] == "p" && boosting ? "b" : q[0]})[0])
         fx = take(born + fx.filter(p => p.t + dt < p.l).map(p => merge(p, {x: p.x + p.vx * dt, y: max(0.05, p.y + p.vy * dt), z: p.z + p.vz * dt, vx: p.vx * pow(p.k == "s" ? 0.3 : 0.7, dt), vy: p.k == "s" ? p.vy * pow(0.5, dt) : p.vy - 14 * dt, vz: p.vz * pow(p.k == "s" ? 0.3 : 0.7, dt), t: p.t + dt})), 40)
         // The rivals: each aims for the speed of the bends ahead, a little more when far behind you, a little less
         // when far ahead, and gets there at its own pace.
@@ -496,28 +615,37 @@ app "voxel rally" {
     }
   }
 
+  // The tracks, two a row: each with its difficulty and tricks, and its best time, or what opens it.
   component TrackGrid(compact = false) {
     Grid {
       columns: 2
-      gap: compact ? 8 : 10
+      gap: compact ? 6 : 8
       for e, i in ENVS {
         Column {
           gap: 0
           onTap: env = i
           Column {
             fill: width
-            gap: 3
-            padding: compact ? [10, 7] : [12, 10]
-            background: i == env ? GOLD : alpha(INK, 0.82)
-            Text { text: upper(e.name); font: PIX; fontSize: compact ? 12 : 14; color: i == env ? INK : white }
-            Text { text: upper(e.sub); font: PIX; fontSize: 9; color: i == env ? alpha(INK, 0.75) : alpha(white, 0.7) }
-            Text { text: best[e.id] == null ? "-" : "BEST " + floor(best[e.id] / 60) + ":" + pad(fixed(best[e.id] % 60, 2), 5, "0"); font: PIX; fontSize: 10; color: i == env ? #1d6a2e : #9fe6a8 }
+            gap: 2
+            padding: compact ? [9, 5] : [10, 7]
+            background: i == env ? (OPEN[i] ? GOLD : #9a9ea8) : alpha(INK, OPEN[i] ? 0.82 : 0.6)
+            Text { text: upper(e.name); font: PIX; fontSize: compact ? 11 : 12; maxLines: 1; color: i == env ? INK : (OPEN[i] ? white : alpha(white, 0.55)) }
+            Row {
+              gap: 4
+              align: center
+              for k in range(4) {
+                Spacer { width: 7; height: 7; background: k <= e.tier ? (i == env ? INK : TIERC[e.tier]) : alpha(i == env ? INK : white, 0.18) }
+              }
+              Text { text: TIERS[e.tier] + (e.feat == "" ? "" : " - " + upper(e.feat)); font: PIX; fontSize: 8; maxLines: 1; color: i == env ? alpha(INK, 0.8) : alpha(white, 0.7) }
+            }
+            Text { text: !OPEN[i] ? "PODIUM ON " + upper(ENVS[i - 1].name) : (best[e.id] == null ? "-" : "BEST " + floor(best[e.id] / 60) + ":" + pad(fixed(best[e.id] % 60, 2), 5, "0")); font: PIX; fontSize: 8; maxLines: 1; color: i == env ? #1d4a2a : (OPEN[i] ? #9fe6a8 : #ffb0b0) }
           }
-          Spacer { fill: width; height: 5; background: i == env ? #a8841a : alpha(black, 0.6) }
+          Spacer { fill: width; height: 4; background: i == env ? (OPEN[i] ? #a8841a : #6a6e78) : alpha(black, 0.6) }
         }
       }
     }
   }
+
 
   component Hint() {
     Text { text: tilted ? "TILT TO STEER - HOLD GAS AND BRAKE - 3 LAPS, 3 RIVALS" : "NO TILT ON THIS PHONE: STEER WITH THE ARROWS - 3 LAPS, 3 RIVALS"; font: PIX; fontSize: 10; color: white; align: center; fill: width; padding: [10, 8]; background: alpha(INK, 0.7) }
@@ -530,9 +658,13 @@ app "voxel rally" {
       Column {
         gap: 0
         weight: 2
-        onTap: go = go + 1
-        Text { text: "RACE"; fill: width; align: center; padding: [0, 14]; font: PIX; fontSize: 26; color: white; background: #e8412f }
-        Spacer { fill: width; height: 6; background: #a82a1e }
+        onTap: {
+          if OPEN[env] {
+            go = go + 1
+          }
+        }
+        Text { text: OPEN[env] ? "RACE" : "LOCKED"; fill: width; align: center; padding: [0, 14]; font: PIX; fontSize: 26; color: OPEN[env] ? white : alpha(white, 0.6); background: OPEN[env] ? #e8412f : #4a4d55 }
+        Spacer { fill: width; height: 6; background: OPEN[env] ? #a82a1e : #33363d }
       }
       Column {
         gap: 0
@@ -716,9 +848,13 @@ app "voxel rally" {
         Column {
           gap: 0
           weight: 2
-          onTap: go = go + 1
-          Text { text: "RACE " + upper(E.name); fill: width; align: center; padding: [0, 14]; font: PIX; fontSize: 16; color: white; background: #e8412f }
-          Spacer { fill: width; height: 6; background: #a82a1e }
+          onTap: {
+            if OPEN[env] {
+              go = go + 1
+            }
+          }
+          Text { text: OPEN[env] ? "RACE " + upper(E.name) : "LOCKED"; fill: width; align: center; padding: [0, 14]; font: PIX; fontSize: 16; color: OPEN[env] ? white : alpha(white, 0.6); background: OPEN[env] ? #e8412f : #4a4d55 }
+          Spacer { fill: width; height: 6; background: OPEN[env] ? #a82a1e : #33363d }
         }
       }
     }
@@ -775,17 +911,31 @@ app "voxel rally" {
         }
         model(TILE, at: [ME.x, 0.07, ME.z], turn: [0, ME.h, 0], scale: [2.4, 1, 4.4], color: alpha(black, 0.3), ambient: 1)
       }
+      // The pads and slick patches lie on the road, in a scene after it, so the road never sorts over them.
+      if PADM != null || SLICKM != null {
+        scene(cam, light: LIGHT, ambient: 0.8, fog: HAZE) {
+          if PADM != null {
+            model(PADM, at: [0, 0, 0], ambient: 1)
+          }
+          if SLICKM != null {
+            model(SLICKM, at: [0, 0, 0], ambient: 0.9)
+          }
+        }
+      }
       scene(cam, light: LIGHT, ambient: 0.62, fog: HAZE) {
         model(FENCE[0], at: [0, 0, 0], twoSided: true)
+        if RAMPM != null {
+          model(RAMPM, at: [0, 0, 0], twoSided: true)
+        }
         model(FENCE[1], at: [0, 0, 0], twoSided: true)
         for s in SECT {
           model(s, at: [0, 0, 0])
         }
         model(GATE, at: [T[0].x, 0, T[0].z], turn: [0, T[0].h, 0])
         for q in SHOWN {
-          model(CARS[q.c], at: [q.x, 0, q.z], turn: [0, q.h, 0])
+          model(CARS[q.c], at: [q.x, q.y ?? 0, q.z], turn: [0, q.h, 0])
         }
-        model(CARS[0], at: [ME.x, chase ? sin(gt * 47) * 0.02 * min(1, spd / PTOP) : 0, ME.z], turn: [0, ME.h, 0])
+        model(CARS[0], at: [ME.x, chase ? py + (air ? 0 : sin(gt * 47) * 0.02 * min(1, spd / PTOP)) : 0, ME.z], turn: [0, ME.h, 0])
       }
       // The smoke and sparks, drawn over the scene as squares where they show, smaller further off: smoke puffs grow
       // and fade, sparks are small and bright.
@@ -796,7 +946,7 @@ app "voxel rally" {
           if q != null {
             let a = p.t / p.l
             let sz = (p.k == "s" ? 0.3 + a * 0.75 : 0.12) * FOC / q.depth
-            rect(q.x - sz / 2, q.y - sz / 2, sz, sz, fill: p.k == "s" ? alpha(E.dust, 0.42 * (1 - a)) : (a < 0.4 ? #fff3b0 : #ff9a2a))
+            rect(q.x - sz / 2, q.y - sz / 2, sz, sz, fill: p.k == "s" ? alpha(E.dust, 0.42 * (1 - a)) : (p.k == "b" ? (a < 0.4 ? #d8fbff : #3ce0ff) : (a < 0.4 ? #fff3b0 : #ff9a2a)))
           }
         }
       }
@@ -933,6 +1083,9 @@ app "voxel rally" {
               align: center
               Spacer { size: 14; background: GOLD }
               Text { text: "+" + earned + " COINS"; font: PIX; fontSize: 16; color: GOLD }
+            }
+            if opened != "" {
+              Text { text: "NEW TRACK: " + upper(opened); font: PIX; fontSize: 13; color: #3ce0ff; align: center }
             }
             for t, i in laps {
               Text { text: "LAP " + (i + 1) + "  " + floor(t / 60) + ":" + pad(fixed(t % 60, 2), 5, "0"); font: PIX; fontSize: 13; color: alpha(white, 0.85); align: center }
