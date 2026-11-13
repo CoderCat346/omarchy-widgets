@@ -1,5 +1,5 @@
 face "Omagara" {
-  meta { owl: 21; description: "Niagara-inspired transparent home face with elastic alphabetical navigation, app search, notifications, calendar, timers and world clocks"; version: "1.5"; license: "MIT"; category: "home" }
+  meta { owl: 21; description: "Niagara-inspired transparent home face with elastic alphabetical navigation, app search, notifications, calendar, timers and world clocks"; version: "1.5.1"; license: "MIT"; category: "home" }
   // Omalauncher OWL time animations are capped at 60 FPS, regardless of display Hz.
   // Keep the highest supported rate; reduce work rather than reducing responsiveness.
   fps: 60
@@ -98,6 +98,8 @@ face "Omagara" {
   state worldZones = [] persist
   state heldAlphabet = []
   state railHeld = false
+  // The cog is one more worm stop, not another alphabet letter.
+  state railSettingsSelected = false
   state menu = ""
   state menuShortcuts = null
   state pickedEvent = null
@@ -199,11 +201,13 @@ face "Omagara" {
   // Include half a cell above/below them so both endpoint hit regions are full-sized.
   let railStep = availableHeight * 0.59 / max(1, len(alphabet) - 1)
   let railHeight = railStep * max(1, len(alphabet))
+  // One shaded tail cell for Settings, outside the letter input range.
+  let railPaintHeight = railHeight + railStep
   let railTop = screenTop + availableHeight * 0.31 - (len(alphabet) > 1 ? railStep / 2 : 0)
   // While held, let the first/last glyph reach the usable screen edge.
   // The fixed touch rail does not move; only its displayed letters do.
   let railUpperReach = max(0, railTop + railStep / 2 - screenTop - 10)
-  let railLowerReach = max(0, (tileHeight ?? 800) - screenInset - 10 - (railTop + railHeight - railStep / 2))
+  let railLowerReach = max(0, (tileHeight ?? 800) - screenInset - 10 - (railTop + railPaintHeight))
   // Animate only the 160ms curve entrance and 110ms release return.
   let railEnterAge = railEntering ? max(0, time - railEnterStart) : 0
   let railEnterT = railEntering ? clamp(railEnterAge / 0.16, 0, 1) : 1
@@ -301,10 +305,16 @@ face "Omagara" {
   let appSections = fullAlphabet.filter(c => !cfg.hideEmpty || len(get(groups, c, [])) > 0)
   let appSectionEnds = scan(appSections, (height, c) => height + appLabelHeight + len(get(groups, c, [])) * appRowHeight, 0)
   let appSectionStarts = map(appSections, (c, i) => appEdgeSpace + (i == 0 ? 0 : appSectionEnds[i - 1]))
-  // The worm owns Settings. Do not push the final apps up with menu rows.
-  // Retain enough tail for a reachable last app near the Search control.
-  let appTail = max(appEdgeSpace, searchBottom - screenInset + 12)
-  let appDocumentHeight = (last(appSectionEnds) ?? 0) + appEdgeSpace + appTail
+  // Keep both settings actions after the final app, with the same initial
+  // edge-space alignment as app sections. No redundant Omagara heading.
+  let appMenuTop = (last(appSectionEnds) ?? 0) + appEdgeSpace + 12 * appScale
+  let appMenuBottom = appMenuTop + 2 * appRowHeight
+  // At the end of the list, align the last Settings action beside the
+  // alphabet cog. Keep a small bottom inset rather than the old oversized
+  // padding. Close and Search stay on the right, clear of the menu text.
+  let appMenuTail = max(28, appSafeBottom - (railTop + railHeight + railStep / 2) - appRowHeight / 2)
+  let appMenuTextWidth = max(32, (tileWidth ?? 400) - screenLeft - controlRight - 110 - 46 * appScale)
+  let appDocumentHeight = appMenuBottom + appMenuTail
   let appMaxScroll = max(0, appDocumentHeight - appPanelHeight)
   // Read time ONLY while gliding. An every-frame trigger would keep OWL's
   // frame clock awake even at rest. This analytic integral is exact at any fps.
@@ -345,13 +355,49 @@ face "Omagara" {
   let appRenderTop = max(0, floor(appOffset / appWindowStride) * appWindowStride - 3 * appRowHeight)
   let appRenderBottom = min(appDocumentHeight, appRenderTop + appPanelHeight + 11 * appRowHeight)
   let visibleSections = appDocument.filter(s => s.top + s.height > appRenderTop && s.top < appRenderBottom).map(s => merge(s, {firstRow: max(0, floor((appRenderTop - s.top - appLabelHeight) / appRowHeight))}))
+  let appMenuRows = [
+    {id: "omagara:settings", kind: "menuAction", top: appMenuTop, height: appRowHeight},
+    {id: "omagara:launcher", kind: "menuAction", top: appMenuTop + appRowHeight, height: appRowHeight}
+  ]
   let fullAppWindow = flatten(visibleSections.map(s => (
     s.top + appLabelHeight > appRenderTop ? [{id: "heading:" + s.section, section: s.section, heading: true, top: s.top, height: appLabelHeight}] : []
-  ) + map(take(drop(get(groups, s.section, []), s.firstRow), ceil((appRenderBottom - appRenderTop) / appRowHeight) + 1), (a, j) => {id: a.key, section: s.section, heading: false, app: a, top: s.top + appLabelHeight + (s.firstRow + j) * appRowHeight, height: appRowHeight}).filter(r => r.top + r.height > appRenderTop && r.top < appRenderBottom)))
-  // Preview only the letter under the thumb. On release the same scroll
-  // position becomes a continuous A–Z list without a layout jump.
-  let appWindow = railHeld && browsing && activeSide != 0 ? fullAppWindow.filter(r => r.section == letter) : fullAppWindow
-  // Anchors always refer to the continuous document, never its preview.
+  ) + map(take(drop(get(groups, s.section, []), s.firstRow), ceil((appRenderBottom - appRenderTop) / appRowHeight) + 1), (a, j) => {id: a.key, section: s.section, heading: false, app: a, top: s.top + appLabelHeight + (s.firstRow + j) * appRowHeight, height: appRowHeight}).filter(r => r.top + r.height > appRenderTop && r.top < appRenderBottom))) + appMenuRows.filter(r => r.top + r.height > appRenderTop && r.top < appRenderBottom)
+  // While touching the worm, center the selected letter's app group alongside
+  // its actual glyph position, not a fixed 33%-height focus line. A long
+  // group moves up to keep its rows in view. The normal continuous browser
+  // and its trailing Settings section are unchanged after finger release.
+  let appPreviewing = railHeld && browsing && activeSide != 0
+  let appPreviewApps = get(groups, letter, [])
+  let appPreviewHeight = appLabelHeight + len(appPreviewApps) * appRowHeight
+  let appPreviewIndex = max(0, indexOf(alphabet, letter))
+  // A is less aggressively biased than Y/Z; preserve exact A–Z app order.
+  let appPreviewAlphabetWeight = 0.80 + 0.20 * appPreviewIndex / max(1, len(alphabet) - 1)
+  let appPreviewCenter = railTop + railVisualY + (appPreviewIndex + 0.5) * railStep - appSafeTop
+  let appPreviewBaseTop = clamp(appPreviewCenter - appPreviewHeight / 2, appEdgeSpace, max(appEdgeSpace, appPanelHeight - appEdgeSpace - appPreviewHeight))
+  // Omalauncher already supplies time-decayed per-app launch scores. Bias the
+  // position of a crowded letter's MOST USED app toward the thumb, without
+  // changing alphabetical order, asking permissions, or tracking users here.
+  // Small groups retain their ordinary letter-centered positioning.
+  let appPreviewFavorite = first(appPreviewApps.filter(a => (a.score ?? 0) > 0).sortBy(a => -(a.score ?? 0)))
+  let appPreviewFavoriteIndex = appPreviewFavorite == null ? -1 : indexOf(appPreviewApps.map(a => a.key), appPreviewFavorite.key)
+  let appPreviewBias = appPreviewFavorite == null ? 0 : clamp(((appPreviewFavorite.score ?? 0) / 4), 0, 1) * clamp((appPreviewHeight - appPanelHeight * 0.50) / max(1, appPanelHeight * 0.30), 0, 1) * appPreviewAlphabetWeight
+  let appPreviewTargetY = clamp(appPreviewCenter * 0.84, appEdgeSpace + appLabelHeight + appRowHeight / 2, max(appEdgeSpace + appLabelHeight + appRowHeight / 2, appPanelHeight - appEdgeSpace - appRowHeight / 2))
+  let appPreviewShift = appPreviewFavoriteIndex < 0 ? 0 : clamp((appPreviewTargetY - (appPreviewBaseTop + appLabelHeight + (appPreviewFavoriteIndex + 0.5) * appRowHeight)) * appPreviewBias, -appPanelHeight * 0.50, appPanelHeight * 0.50)
+  let appPreviewTop = appPreviewBaseTop + appPreviewShift
+  // A shifted tall group may start above the screen. Virtualize the actual
+  // visible slice instead of permanently taking only its first N apps.
+  let appPreviewFirstRow = max(0, floor((-appPreviewTop - appLabelHeight) / appRowHeight) - 2)
+  let appPreviewCount = max(0, ceil((appPanelHeight - appPreviewTop - appLabelHeight - appPreviewFirstRow * appRowHeight) / appRowHeight) + 2)
+  let appPreviewRows = (appPreviewTop + appLabelHeight > 0 ? [{id: "heading:" + letter, section: letter, heading: true, top: appPreviewTop, height: appLabelHeight}] : []) + map(take(drop(appPreviewApps, appPreviewFirstRow), appPreviewCount), (a, j) => {id: a.key, section: letter, heading: false, app: a, top: appPreviewTop + appLabelHeight + (appPreviewFirstRow + j) * appRowHeight, height: appRowHeight})
+  // The cog previews ONLY the two settings actions. Anchor the second
+  // action near the selected cog and clamp both rows within the viewport.
+  // Release restores the continuous app list at its settings section.
+  let appSettingsPreviewHeight = 2 * appRowHeight
+  let appSettingsPreviewCenter = railTop + railHeight + railStep / 2 + railVisualY - appSafeTop
+  let appSettingsPreviewTop = clamp(appSettingsPreviewCenter - 1.5 * appRowHeight, appEdgeSpace, max(appEdgeSpace, appPanelHeight - 12 - appSettingsPreviewHeight))
+  let appSettingsPreviewRows = map(appMenuRows, r => merge(r, {top: appSettingsPreviewTop + r.top - appMenuTop}))
+  let appWindow = appPreviewing ? (railSettingsSelected ? appSettingsPreviewRows : appPreviewRows) : fullAppWindow
+  // Anchoring must use the unfiltered document even during a preview.
   let appVisibleRows = fullAppWindow.filter(r => r.top + r.height > appOffset && r.top < appOffset + appPanelHeight)
   let appFirst = first(appVisibleRows)
   // A single focus line serves section alignment and manual-scroll tracking.
@@ -376,7 +422,8 @@ face "Omagara" {
   // Keep the same visible row through installation/removal/profile updates.
   let anchorSection = find(appDocument, s => s.section == appAnchorSection)
   let anchorIndex = indexOf(get(appKeyGroups, appAnchorSection, []), appAnchor)
-  let anchorTop = anchorSection == null ? null : appAnchor == "heading:" + appAnchorSection ? anchorSection.top : anchorIndex < 0 ? null : anchorSection.top + appLabelHeight + anchorIndex * appRowHeight
+  let anchorMenu = find(appMenuRows, r => r.id == appAnchor)
+  let anchorTop = anchorMenu != null ? anchorMenu.top : anchorSection == null ? null : appAnchor == "heading:" + appAnchorSection ? anchorSection.top : anchorIndex < 0 ? null : anchorSection.top + appLabelHeight + anchorIndex * appRowHeight
   // No per-scroll on-triggers: OWL limits those to 10 runs/sec. Anchors
   // are captured by direct input handlers and once when a glide stops.
   on apps {
@@ -822,7 +869,7 @@ face "Omagara" {
     let visual = side == alphabetSide
     Column {
       width: visual ? 44 : 20
-      height: railHeight
+      height: visual ? railPaintHeight : railHeight
       gap: 0
       // Track both axes: outward thumb motion must work even without moving vertically.
       // Hit region stays fixed; the glyph transforms are visual only.
@@ -833,6 +880,7 @@ face "Omagara" {
         appVelocity = 0
         heldAlphabet = liveAlphabet
         railHeld = true
+        railSettingsSelected = y >= railHeight + railStep * 0.25 && visual
         draggingSide = 0
         railReturning = false
         // A new touch cancels the optional ripple immediately.
@@ -842,7 +890,7 @@ face "Omagara" {
         railFlickLastY = y
         railFlickStarted = time
         // Beyond an endpoint, the worm follows the thumb 1:1 up to the screen edge.
-        let edgeY = y < railStep / 2 ? y - railStep / 2 : y > railHeight - railStep / 2 ? y - (railHeight - railStep / 2) : 0
+        let edgeY = y < railStep / 2 ? y - railStep / 2 : y > railPaintHeight - railStep / 2 ? y - (railPaintHeight - railStep / 2) : 0
         railOverpull = len(alphabet) < 2 ? 0 : clamp(edgeY, -railUpperReach, railLowerReach)
         railEnterStart = time
         railEntering = cfg.curve && !cfg.reduceMotion
@@ -852,13 +900,24 @@ face "Omagara" {
         railPull = visual ? (side == 1 ? clamp(106 - x, 0, railMaxReach) : clamp(62 + x, 0, railMaxReach)) : min(84, railMaxReach)
         railThumbX = side == 1 ? (tileWidth ?? 400) - screenRight - 4 - (visual ? 44 : 20) + x : screenLeft + (visual ? 4 : 0) + x
         touchY = clamp(railTop + y, screenTop, (tileHeight ?? 800) - screenInset)
-        fingerPosition = clamp(y / railStep - 0.5, 0, max(0, len(alphabet) - 1))
+        fingerPosition = clamp(y / railStep - 0.5, 0, max(0, len(alphabet) - (railSettingsSelected ? 0 : 1)))
         let pressedLetter = get(alphabet, clamp(floor(y / railStep), 0, max(0, len(alphabet) - 1)), letter)
         letter = pressedLetter
         if cfg.hapticFeedback != "Off" { haptic() }
-        // Use the pressed letter directly: derived railScroll may still
-        // reflect the previous letter in this event.
-        appScroll = clamp(get(appSectionStarts, max(0, indexOf(appSections, pressedLetter)), 0) - appFocusY, 0, appMaxScroll)
+        // Keep the continuous list near the same position on release.
+        let pressedApps = get(groups, pressedLetter, [])
+        let pressedHeight = appLabelHeight + len(pressedApps) * appRowHeight
+        let pressedCenter = railTop + railOverpull + (max(0, indexOf(alphabet, pressedLetter)) + 0.5) * railStep - appSafeTop
+        let pressedBaseTop = clamp(pressedCenter - pressedHeight / 2, appEdgeSpace, max(appEdgeSpace, appPanelHeight - appEdgeSpace - pressedHeight))
+        let pressedFavorite = first(pressedApps.filter(a => (a.score ?? 0) > 0).sortBy(a => -(a.score ?? 0)))
+        let pressedFavoriteIndex = pressedFavorite == null ? -1 : indexOf(pressedApps.map(a => a.key), pressedFavorite.key)
+        let pressedAlphabetWeight = 0.80 + 0.20 * max(0, indexOf(alphabet, pressedLetter)) / max(1, len(alphabet) - 1)
+        let pressedBias = pressedFavorite == null ? 0 : clamp(((pressedFavorite.score ?? 0) / 4), 0, 1) * clamp((pressedHeight - appPanelHeight * 0.50) / max(1, appPanelHeight * 0.30), 0, 1) * pressedAlphabetWeight
+        let pressedTargetY = clamp(pressedCenter * 0.84, appEdgeSpace + appLabelHeight + appRowHeight / 2, max(appEdgeSpace + appLabelHeight + appRowHeight / 2, appPanelHeight - appEdgeSpace - appRowHeight / 2))
+        let pressedShift = pressedFavoriteIndex < 0 ? 0 : clamp((pressedTargetY - (pressedBaseTop + appLabelHeight + (pressedFavoriteIndex + 0.5) * appRowHeight)) * pressedBias, -appPanelHeight * 0.50, appPanelHeight * 0.50)
+        let pressedTop = pressedBaseTop + pressedShift
+        // Sliding onto the cog navigates to the actual bottom settings menu.
+        appScroll = railSettingsSelected ? appMaxScroll : clamp(get(appSectionStarts, max(0, indexOf(appSections, pressedLetter)), 0) - pressedTop, 0, appMaxScroll)
         menu = ""
         activeSide = 1
         browsing = true
@@ -873,22 +932,35 @@ face "Omagara" {
         railFlickLastY = y
         railHeld = true
         draggingSide = 1
-        let edgeY = y < railStep / 2 ? y - railStep / 2 : y > railHeight - railStep / 2 ? y - (railHeight - railStep / 2) : 0
+        let nextSettings = y >= railHeight + railStep * 0.25 && visual
+        let edgeY = y < railStep / 2 ? y - railStep / 2 : y > railPaintHeight - railStep / 2 ? y - (railPaintHeight - railStep / 2) : 0
         railOverpull = len(alphabet) < 2 ? 0 : clamp(edgeY, -railUpperReach, railLowerReach)
         // Track absolute thumb position while the rail's hit cells stay fixed.
         // Mirror the inward-facing curve when the rail is on the left.
         railPull = visual ? (side == 1 ? clamp(106 - x, 0, railMaxReach) : clamp(62 + x, 0, railMaxReach)) : min(84, railMaxReach)
         railThumbX = side == 1 ? (tileWidth ?? 400) - screenRight - 4 - (visual ? 44 : 20) + x : screenLeft + (visual ? 4 : 0) + x
         touchY = clamp(railTop + y, screenTop, (tileHeight ?? 800) - screenInset)
-        fingerPosition = clamp(y / railStep - 0.5, 0, max(0, len(alphabet) - 1))
+        fingerPosition = clamp(y / railStep - 0.5, 0, max(0, len(alphabet) - (nextSettings ? 0 : 1)))
         let nextLetter = get(alphabet, clamp(floor(y / railStep), 0, max(0, len(alphabet) - 1)), letter)
-        if nextLetter != letter {
+        if nextSettings != railSettingsSelected || (!nextSettings && nextLetter != letter) {
           hapticSteps = hapticSteps + 1
-          if cfg.hapticFeedback == "Every letter" || (cfg.hapticFeedback == "Reduced" && hapticSteps % 2 == 0) { haptic() }
-          letter = nextLetter
+          // Entering Settings must give one definite bump, even with Reduced haptics.
+          if cfg.hapticFeedback != "Off" && (nextSettings || cfg.hapticFeedback == "Every letter" || hapticSteps % 2 == 0) { haptic() }
         }
-        // Match scroll position to the letter selected in this event.
-        appScroll = clamp(get(appSectionStarts, max(0, indexOf(appSections, nextLetter)), 0) - appFocusY, 0, appMaxScroll)
+        railSettingsSelected = nextSettings
+        if !nextSettings { letter = nextLetter }
+        let nextApps = get(groups, nextLetter, [])
+        let nextHeight = appLabelHeight + len(nextApps) * appRowHeight
+        let nextCenter = railTop + railOverpull + (max(0, indexOf(alphabet, nextLetter)) + 0.5) * railStep - appSafeTop
+        let nextBaseTop = clamp(nextCenter - nextHeight / 2, appEdgeSpace, max(appEdgeSpace, appPanelHeight - appEdgeSpace - nextHeight))
+        let nextFavorite = first(nextApps.filter(a => (a.score ?? 0) > 0).sortBy(a => -(a.score ?? 0)))
+        let nextFavoriteIndex = nextFavorite == null ? -1 : indexOf(nextApps.map(a => a.key), nextFavorite.key)
+        let nextAlphabetWeight = 0.80 + 0.20 * max(0, indexOf(alphabet, nextLetter)) / max(1, len(alphabet) - 1)
+        let nextBias = nextFavorite == null ? 0 : clamp(((nextFavorite.score ?? 0) / 4), 0, 1) * clamp((nextHeight - appPanelHeight * 0.50) / max(1, appPanelHeight * 0.30), 0, 1) * nextAlphabetWeight
+        let nextTargetY = clamp(nextCenter * 0.84, appEdgeSpace + appLabelHeight + appRowHeight / 2, max(appEdgeSpace + appLabelHeight + appRowHeight / 2, appPanelHeight - appEdgeSpace - appRowHeight / 2))
+        let nextShift = nextFavoriteIndex < 0 ? 0 : clamp((nextTargetY - (nextBaseTop + appLabelHeight + (nextFavoriteIndex + 0.5) * appRowHeight)) * nextBias, -appPanelHeight * 0.50, appPanelHeight * 0.50)
+        let nextTop = nextBaseTop + nextShift
+        appScroll = nextSettings ? appMaxScroll : clamp(get(appSectionStarts, max(0, indexOf(appSections, nextLetter)), 0) - nextTop, 0, appMaxScroll)
         menu = ""
         activeSide = 1
         browsing = true
@@ -896,7 +968,7 @@ face "Omagara" {
         replyKey = ""
         replyDraft = ""
       }
-      onTap: { browsing = true; activeSide = 0; railHeld = false; railPull = 0 }
+      onTap: { browsing = true; activeSide = 0; railHeld = false; railSettingsSelected = false; railPull = 0 }
       // A press is cancelled when the drag detector consumes its first move.
       // Keep the curve active in either detector order at that transition;
       // a real drag release/cancellation always clears both states below.
@@ -910,7 +982,7 @@ face "Omagara" {
           railReturning = !cfg.reduceMotion && (abs(railOverpull) > 0.5 || cfg.curve && railPull * railEnterEase > 0.5)
           railOverpull = 0
           railEntering = false
-          activeSide = 0; railHeld = false; railPull = 0
+          activeSide = 0; railHeld = false; railSettingsSelected = false; railPull = 0
         }
       }
       onDragEnd: {
@@ -941,33 +1013,33 @@ face "Omagara" {
         railReturning = !cfg.reduceMotion && (abs(railOverpull) > 0.5 || cfg.curve && railPull * railEnterEase > 0.5)
         railOverpull = 0
         railEntering = false
-        draggingSide = 0; activeSide = 0; railHeld = false; railPull = 0
+        draggingSide = 0; activeSide = 0; railHeld = false; railSettingsSelected = false; railPull = 0
       }
       // The selected edge draws the glyphs; the other edge is optional input.
       // Keep showing the worm during its release return even if idle alphabet is hidden.
       if visual && (cfg.idleAlphabet || activeSide != 0 || railReturning || railWiggling) {
-        // Only move the visual worm: the rail's touch area stays put.
+        // Lengthen the existing ribbon, not a separate floating circle.
         Box {
           width: 44
-          height: railHeight
+          height: railPaintHeight
           offset: [0, railVisualY]
           // Two contour segments per letter while wiggling, four otherwise.
           // Compute the wave once; letter centers reuse the same Canvas samples.
           let wiggleActive = railWiggling && !cfg.reduceMotion
           let contourSteps = wiggleActive ? 2 : 4
-          let wigglePhases = wiggleActive ? map(range(len(alphabet) * contourSteps + 1), j => railWiggleAge - abs(j / contourSteps - 0.5 - railWiggleOrigin) * 0.015) : []
+          let wigglePhases = wiggleActive ? map(range((len(alphabet) + 1) * contourSteps + 1), j => railWiggleAge - abs(j / contourSteps - 0.5 - railWiggleOrigin) * 0.015) : []
           let wiggleOffsets = wiggleActive ? map(wigglePhases, phase => phase > 0 && phase < 1.34 ? railWiggleDirection * 11 * railWiggleStrength * pow(1 - phase / 1.34, 2) * sin(phase * 36) : 0) : []
           if cfg.shadeAlphabet && len(alphabet) > 0 {
             Canvas {
               width: railMaxReach + 44
-              height: railHeight
+              height: railPaintHeight
               offset: [alphabetSide == 1 ? -railMaxReach : 0, 0]
               // Use the same wave as the glyphs, sampled at every letter center.
               // In idle/drag states, retain the original four-point contour.
-              let wormSamples = map(range(len(alphabet) * contourSteps + 1), j => {
+              let wormSamples = map(range((len(alphabet) + 1) * contourSteps + 1), j => {
                 x: (alphabetSide == 1 ? railMaxReach + 22 : 22) - alphabetSide * railCurvePull *
                   (railCurveStrength > 0 ? (1 + cos(rad(min(abs(j / contourSteps - 0.5 - fingerPosition) / max(10, min(14, len(alphabet) * 0.58)), 1) * 180))) / 2 * railCurveStrength : 0) - alphabetSide * (wiggleActive ? wiggleOffsets[j] : 0),
-                y: cfg.roundAlphabet ? 12 + j / max(1, len(alphabet) * contourSteps) * max(0, railHeight - 24) : j * railStep / contourSteps
+                y: cfg.roundAlphabet ? 12 + j / max(1, (len(alphabet) + 1) * contourSteps) * max(0, railPaintHeight - 24) : j * railStep / contourSteps
               })
               path(map(wormSamples, p => [p.x - 12, p.y]) + reverse(map(wormSamples, p => [p.x + 12, p.y])), closed: true, fill: legibilityShade)
               if cfg.roundAlphabet {
@@ -1333,14 +1405,17 @@ face "Omagara" {
           if appFirst != null { appAnchor = appFirst.id; appAnchorSection = appFirst.section; appAnchorOffset = appOffset - appFirst.top }
         }
         for row in appWindow key row.id {
+          // Preview rows use their own bounded screen positions; ordinary
+          // scrolling still uses continuous document coordinates.
+          let rowY = appPreviewing ? row.top : row.top - appOffset
           // Fade by row centre: a partly clipped row must not vanish whole.
-          let rowCentre = row.top - appOffset + row.height / 2
+          let rowCentre = rowY + row.height / 2
           let edge = clamp(min(rowCentre, appPanelHeight - rowCentre) / max(1, appFade), 0, 1)
           let rowAlpha = edge * edge * (3 - 2 * edge)
           Box {
             width: appPanelWidth
             height: row.height
-            offset: [0, row.top - appOffset]
+            offset: [0, rowY]
             opacity: rowAlpha
             // Offscreen buffer rows retain only lightweight keyed boxes:
             // avoid composing their icon and text subtrees every frame.
@@ -1360,8 +1435,65 @@ face "Omagara" {
                     radius: cfg.shadeAppLabels && cfg.roundAppLabels ? 4 * appScale : 0
                   }
                 }
+              } else if row.kind == "menuAction" {
+                Row {
+                  fill: width
+                  height: appRowHeight
+                  align: center
+                  gap: 8 * appScale
+                  padding: [4 * appScale, 8 * appScale]
+                  onTap: {
+                    if rowAlpha > 0.08 && rowY >= 0 && rowY + row.height <= appPanelHeight {
+                      appVelocity = 0
+                      browsing = false
+                      activeSide = 0
+                      railHeld = false
+                      draggingSide = 0
+                      letter = first(liveAlphabet) ?? "A"
+                      appScroll = 0
+                      appAnchor = ""
+                      queryText = ""
+                      menu = ""
+                      if row.id == "omagara:settings" {
+                        resetConfirm = false
+                        screenMode = "settings"
+                        screen()
+                      } else {
+                        launcher("settings")
+                      }
+                    }
+                  }
+                  Box {
+                    size: 32 * appScale
+                    align: center
+                    // Theme-aware settings gear, drawn without font glyphs.
+                    Canvas {
+                      size: 22 * appScale
+                      for i in range(8) {
+                        rotate(i * 45, 11 * appScale, 11 * appScale) {
+                          line(11 * appScale, 2 * appScale, 11 * appScale, 4 * appScale, stroke: secondaryText, width: 2 * appScale, cap: round)
+                        }
+                      }
+                      circle(11 * appScale, 11 * appScale, 6.5 * appScale, stroke: secondaryText, width: 2 * appScale)
+                      circle(11 * appScale, 11 * appScale, 2 * appScale, fill: secondaryText)
+                    }
+                  }
+                  Row {
+                    width: appMenuTextWidth
+                    Text {
+                      text: row.id == "omagara:settings" ? "Omagara settings" : "Omalauncher settings"
+                      font: chosenFont
+                      fontSize: 17 * appScale
+                      color: primaryText
+                      maxLines: 2
+                      padding: cfg.shadeAppLabels ? [2 * appScale, 5 * appScale] : [0, 0]
+                      background: cfg.shadeAppLabels ? appLabelShade : transparent
+                      radius: cfg.shadeAppLabels && cfg.roundAppLabels ? 6 * appScale : 0
+                    }
+                  }
+                }
               } else {
-                AppRow { a: row.app; thumbView: true; interactive: rowAlpha > 0.08 && row.top >= appOffset && row.top + row.height <= appOffset + appPanelHeight }
+                AppRow { a: row.app; thumbView: true; interactive: rowAlpha > 0.08 && rowY >= 0 && rowY + row.height <= appPanelHeight }
               }
             }
           }
@@ -1417,43 +1549,40 @@ face "Omagara" {
       padding: [0, railTop, screenRight + 4, 0]
       AlphabetRail { side: 1; visible: alphabetSide == 1 || cfg.leftInput }
     }
-    // A small, independent Settings target rides just below the last letter.
-  // Its hit area does not overlap any alphabet input cell.
-  if (cfg.idleAlphabet || activeSide != 0 || railReturning || railWiggling) && len(alphabet) > 0 {
-    let endDistance = abs(len(alphabet) - 1 - fingerPosition)
-    let endRadius = max(10, min(14, len(alphabet) * 0.58))
-    let endCurve = railCurveStrength > 0 ? (1 + cos(rad(min(endDistance / endRadius, 1) * 180))) / 2 * railCurveStrength : 0
-    let cogX = clamp(railHomeX - alphabetSide * railCurvePull * endCurve, screenLeft + 18, (tileWidth ?? 400) - screenRight - 18)
-    let cogY = clamp(railTop + railHeight + railVisualY + 4, screenTop + 4, appSafeBottom - 40)
-    Box {
-      size: 36
-      radius: 18
-      border: cfg.bubbleBorder ? 1 : 0
-      borderColor: border
-      background: alpha(surface, 0.92)
-      align: center
-      offset: [cogX - 18, cogY]
-      onTap: {
-        appVelocity = 0; browsing = false; activeSide = 0; railHeld = false
-        draggingSide = 0; letter = first(liveAlphabet) ?? "A"
-        appScroll = 0; appAnchor = ""; queryText = ""; menu = ""
-        resetConfirm = false; screenMode = "settings"; screen()
-      }
-      Canvas {
-        size: 22
-        for i in range(8) {
-          rotate(i * 45, 11, 11) {
-            line(11, 2, 11, 4, stroke: primaryText, width: 2, cap: round)
+    // Letter-height gear centered in the worm's shaded tail, below the
+    // alphabet hit cells. Keep the background entirely on the worm Canvas.
+    if (cfg.idleAlphabet || activeSide != 0 || railReturning || railWiggling) && len(alphabet) > 0 {
+      let gearDistance = abs(len(alphabet) - fingerPosition)
+      let gearRadius = max(10, min(14, len(alphabet) * 0.58))
+      let gearCurve = railCurveStrength > 0 ? (1 + cos(rad(min(gearDistance / gearRadius, 1) * 180))) / 2 * railCurveStrength : 0
+      let gearPhase = railWiggleAge - abs(len(alphabet) - railWiggleOrigin) * 0.015
+      let gearWiggle = railWiggling && !cfg.reduceMotion && gearPhase > 0 && gearPhase < 1.34 ? railWiggleDirection * 11 * railWiggleStrength * pow(1 - gearPhase / 1.34, 2) * sin(gearPhase * 36) : 0
+      let gearX = railHomeX - alphabetSide * (railCurvePull * gearCurve + gearWiggle)
+      // Display-only glyph: the extended stationary AlphabetRail handles
+      // taps, held navigation and haptics through this cell without a second
+      // overlapping gesture target.
+      Box {
+        width: 44
+        height: railStep
+        align: center
+        offset: [gearX - 22, railTop + railHeight + railVisualY]
+        // The gear's 11dp artwork matches the alphabet's 11dp font.
+        Canvas {
+          size: 11
+          scale: railSettingsSelected ? 1.16 : 1
+          for i in range(8) {
+            rotate(i * 45, 5.5, 5.5) {
+              line(5.5, 0.9, 5.5, 2.3, stroke: railSettingsSelected ? accent : primaryText, width: 0.9, cap: round)
+            }
           }
+          circle(5.5, 5.5, 3.3, stroke: railSettingsSelected ? accent : primaryText, width: 0.9)
+          circle(5.5, 5.5, 0.9, fill: railSettingsSelected ? accent : primaryText)
         }
-        circle(11, 11, 6.5, stroke: primaryText, width: 2)
-        circle(11, 11, 2, fill: primaryText)
       }
     }
-  }
-  // The selected-letter cue mirrors with the rail. Its screen-space
+    // The selected-letter cue mirrors with the rail. Its screen-space
     // position is independent of the fixed left and right touch targets.
-    if railHeld && activeSide != 0 {
+    if railHeld && activeSide != 0 && !railSettingsSelected {
       let peakX = railHomeX - alphabetSide * railPull
       let bubbleX = alphabetSide == 1 ? max(screenLeft + 22, peakX - 42) : min((tileWidth ?? 400) - screenRight - 22, peakX + 42)
       let edgeThumbGap = alphabetSide == 1 ? screenLeft + 56 - railThumbX : railThumbX - ((tileWidth ?? 400) - screenRight - 56)
@@ -1467,7 +1596,7 @@ face "Omagara" {
         background: alpha(surface, 0.94)
         align: center
         offset: [bubbleX - 21, clamp(touchY - 21 - bubbleLift, screenTop + 4, max(screenTop + 4, appSafeBottom - 42))]
-        Text { text: letter; font: chosenFont; fontSize: 20; color: accent; bold: true; align: center }
+        Text { text: railSettingsSelected ? "⚙" : letter; font: chosenFont; fontSize: 20; color: accent; bold: true; align: center }
       }
     }
     Box {
