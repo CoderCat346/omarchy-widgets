@@ -1,0 +1,378 @@
+widget "pressure" {
+  page: 4
+  order: 10
+  size: 3x3
+  minSize: 2x3
+
+  meta {
+    description: "How much room this phone really has left, from the kernel: available RAM over the last ten minutes, swap, reclaimable cache, and the biggest process. Tap for the top ten and a stop button."
+    version: "1.2"
+    license: "MIT"
+    category: "system"
+    owl: 21
+  }
+
+  requires { pacman: ["procps-ng"] }
+
+  // The whole phone's memory, as its own kernel counts it, in kB:
+  // MemTotal MemAvailable SwapTotal SwapFree AnonPages Cached SReclaimable Slab.
+  // Every 30 s, not every 2: a shell spawn is the expensive part of this widget on a phone, and
+  // free memory moves in minutes, not in seconds.
+  source k = cmd("awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} /^SwapTotal:/{st=$2} /^SwapFree:/{sf=$2} /^AnonPages:/{an=$2} /^Cached:/{c=$2} /^SReclaimable:/{sr=$2} /^Slab:/{s=$2} END{print t, a, st, sf, an, c, sr, s}' /proc/meminfo") every 30s
+
+  // pid, RSS in kB, name, biggest first. Only this Linux system's own processes are here.
+  source top = cmd("ps -eo pid=,rss=,comm= --sort=-rss | head -10") every 2m
+
+  // Free and total blocks and the block size; df walks the f2fs mount and can stall.
+  source disk = cmd("stat -f -c '%a %b %S' /") every 10m
+
+  state armed = 0
+
+  // A two-column tile is a third narrower than the 3x3 the widget is made for,
+  // so the words get shorter there rather than wrapping.
+  let narrow = (tileWidth ?? 999) < 150
+
+  let v = words(k ?? "")
+  let total = num(v[0] ?? 0) * 1024
+  let avail = num(v[1] ?? 0) * 1024
+  let swapTotal = num(v[2] ?? 0) * 1024
+  let swapUsed = (num(v[2] ?? 0) - num(v[3] ?? 0)) * 1024
+  let anon = num(v[4] ?? 0) * 1024
+  let cache = num(v[5] ?? 0) * 1024
+  let reclaim = num(v[6] ?? 0) * 1024
+  let slab = num(v[7] ?? 0) * 1024
+
+  let ready = total > 0
+  let pct = ready ? avail / total * 100 : null
+  let swapPct = swapTotal > 0 ? swapUsed / swapTotal * 100 : 0
+  // Ten minutes at 30 s a sample.
+  let h = history(pct, 20)
+  let hs = h.filter(x => x != null)
+
+  // The colour of the moment: the number and the trace go red when the phone
+  // is nearly out, the rest of the time they stay in the theme's green.
+  let warn = !ready ? muted : pct < 12 ? red : pct < 22 ? yellow : accent
+  let numInk = !ready ? muted : pct < 12 ? red : foreground
+  let label = !ready ? "…" : pct < 12 ? "tight" : pct < 22 ? "warm" : "ok"
+
+  let procs = top == null ? [] : lines(top).filter(l => l != "").map(l => {
+    pid: num(words(l)[0]),
+    rss: num(words(l)[1]) * 1024,
+    name: words(l)[2] ?? "?",
+  })
+  let hog = len(procs) > 0 ? procs[0] : null
+
+  let dv = words(disk ?? "")
+  let block = num(dv[2] ?? 0)
+  let diskFree = num(dv[0] ?? 0) * block
+  let diskTotal = num(dv[1] ?? 0) * block
+  let diskUsedPct = diskTotal > 0 ? (diskTotal - diskFree) / diskTotal * 100 : 0
+
+  onTap: screen()
+
+  // Tell me once when the phone starts running out, not every sample after that.
+  when ready && pct < 12 {
+    notify("pressure", "${fmtBytes(avail)} free of ${fmtBytes(total)}${hog == null ? "" : ", ${hog.name} holds ${fmtBytes(hog.rss)}"}")
+  }
+
+  // A labelled bar: the name, the share, the size.
+  component Bar(name, value, most, tint) {
+    Row {
+      gap: 8
+      align: center
+      Text { text: name; fontSize: 10; style: muted; width: narrow ? 62 : 78 }
+      Progress { value: value; max: most > 0 ? most : 1; weight: 1; fill: width; height: 5; color: tint }
+      Text { text: fmtBytes(value); fontSize: 10; width: narrow ? 40 : 52; align: end }
+    }
+  }
+
+  // A colour and what it means, so the thresholds are explained once.
+  component Key(tint, text) {
+    Row {
+      gap: 5
+      align: center
+      Box { width: 6; height: 6; radius: 3; background: tint }
+      Text { text: text; fontSize: 9; style: muted }
+    }
+  }
+
+  Column {
+    padding: 9
+    gap: 5
+
+    // ---- what it is, and how it is doing right now
+    Row {
+      align: center
+      Text { text: "pressure"; style: muted; fontSize: 11; letterSpacing: 0.4 }
+      Spacer { weight: 1 }
+      Text {
+        text: ready ? (narrow ? label : "${round(pct)}% ${label}") : "…"
+        fontSize: 10
+        color: warn
+        padding: [1, 6]
+        radius: 4 * corners
+        background: alpha(warn, label == "ok" ? 0.12 : 0.2)
+      }
+    }
+
+    // ---- the number is the headline: what is free, out of what
+    Column {
+      gap: 0
+      Text {
+        text: ready ? fmtBytes(avail) : "…"
+        fontSize: 28
+        bold: true
+        color: numInk
+        letterSpacing: -0.5
+      }
+      Text {
+        text: ready ? (narrow ? "of ${fmtBytes(total)}" : "available of ${fmtBytes(total)}") : "reading the kernel"
+        style: muted
+        fontSize: 10
+      }
+    }
+
+    // ---- ten minutes of it, drawn to a scale of 0 to 100% left
+    Box {
+      weight: 1
+      align: bottom
+      Canvas {
+        fill: true
+        // The tight zone sits at the bottom of the scale: 12% left and under.
+        let z = height * 0.88
+        rect(0, z, width, height - z, fill: alpha(red, 0.13))
+        line(0, z, width, z, stroke: alpha(red, 0.45))
+        for g in [25, 50, 75] {
+          line(0, height * (1 - g / 100), width, height * (1 - g / 100), stroke: alpha(foreground, 0.05))
+        }
+
+        if (len(hs) >= 2) {
+          let step = width / (len(hs) - 1)
+          let pts = hs.map((x, i) => [i * step, height - clamp(x, 0, 100) / 100 * height])
+          // the area under the line, brightest at the line and gone at the floor
+          path([[0, height]] + pts + [[width, height]], closed: true,
+            fill: linear(0, 0, 0, height, [alpha(warn, 0.32), alpha(warn, 0.02)]))
+          path(pts, stroke: warn, width: 1.5)
+          // the lowest it fell to, so a dip doesn't vanish between samples
+          let low = height - clamp(min(hs), 0, 100) / 100 * height
+          line(0, low, width, low, stroke: alpha(warn, 0.4))
+          // and where it is now
+          circle(width - 4, last(pts)[1], 3.2, fill: alpha(warn, 0.22))
+          circle(width - 4, last(pts)[1], 1.6, fill: warn)
+        }
+
+        if (pct == null || pct < 65) {
+          text("10 min", 0, 6, size: 8, color: muted)
+          if (len(hs) >= 2) {
+            text("low ${fmtBytes(min(hs) / 100 * total)}", width, 6, size: 8, color: muted, align: end)
+          }
+        }
+      }
+    }
+
+    // ---- the two things worth knowing besides RAM
+    Row {
+      gap: 5
+      align: center
+      Text { text: "swap"; fontSize: 9; style: muted; width: 24 }
+      Progress { value: swapPct; max: 100; weight: 1; fill: width; height: 3; color: swapPct > 60 ? red : blue }
+      Text { text: swapTotal > 0 ? fmtBytes(swapUsed) : "—"; fontSize: 9; style: muted }
+    }
+
+    Row {
+      gap: 5
+      align: center
+      Text { text: "top"; fontSize: 9; style: muted; width: 24 }
+      Text { text: hog == null ? "…" : hog.name; fontSize: 10; style: muted; maxLines: 1; weight: 1 }
+      Text { text: hog == null ? "" : fmtBytes(hog.rss); fontSize: 9; style: muted }
+    }
+  }
+
+  screen {
+    title: "pressure"
+    Column {
+      padding: 14
+      gap: 10
+
+      // ---- the headline
+      Row {
+        align: bottom
+        gap: 10
+        Text {
+          text: ready ? fmtBytes(avail) : "…"
+          fontSize: 38
+          bold: true
+          color: numInk
+          letterSpacing: -1
+        }
+        Column {
+          weight: 1
+          gap: 1
+          Text { text: "available"; style: muted; fontSize: 9; letterSpacing: 1 }
+          Text { text: "of ${fmtBytes(total)} total"; style: muted; fontSize: 11 }
+        }
+        Text {
+          text: ready ? "${round(pct)}% ${label}" : "…"
+          fontSize: 11
+          color: warn
+          padding: [3, 8]
+          radius: 5 * corners
+          background: alpha(warn, label == "ok" ? 0.12 : 0.2)
+        }
+      }
+
+      // ---- the same ten minutes, bigger, with the scale down the side
+      Row {
+        gap: 8
+        align: top
+
+        Column {
+          width: 30
+          height: 104
+          justify: spaceBetween
+          Text { text: "100%"; fontSize: 8; style: muted; align: end }
+          Text { text: "50%"; fontSize: 8; style: muted; align: end }
+          Text { text: "0%"; fontSize: 8; style: muted; align: end }
+        }
+
+        Box {
+          weight: 1
+          height: 104
+          Canvas {
+            fill: true
+            let z = height * 0.88
+            rect(0, z, width, height - z, fill: alpha(red, 0.12))
+            line(0, z, width, z, stroke: alpha(red, 0.5))
+
+            for g in [25, 50, 75] {
+              line(0, height * (1 - g / 100), width, height * (1 - g / 100), stroke: alpha(foreground, 0.07))
+            }
+
+            if (len(hs) >= 2) {
+              let step = width / (len(hs) - 1)
+              let pts = hs.map((x, i) => [i * step, height - clamp(x, 0, 100) / 100 * height])
+              path([[0, height]] + pts + [[width, height]], closed: true,
+                fill: linear(0, 0, 0, height, [alpha(warn, 0.30), alpha(warn, 0.02)]))
+              path(pts, stroke: warn, width: 2)
+              // the lowest it fell to, and where it is now
+              let low = height - clamp(min(hs), 0, 100) / 100 * height
+              line(0, low, width, low, stroke: alpha(warn, 0.4))
+              let nowY = height - clamp(pct ?? 0, 0, 100) / 100 * height
+              circle(width - 5, nowY, 4.5, fill: alpha(warn, 0.2))
+              circle(width - 5, nowY, 2.2, fill: warn)
+            }
+          }
+        }
+      }
+
+      Row {
+        gap: 10
+        align: center
+        Text { text: "10 min · 30 s samples"; style: muted; fontSize: 9; weight: 1 }
+        if (len(hs) >= 2) {
+          Text {
+            text: "low ${fmtBytes(min(hs) / 100 * total)} · high ${fmtBytes(max(hs) / 100 * total)}"
+            fontSize: 9
+            color: muted
+          }
+        }
+      }
+
+      Flow {
+        gap: 14
+        Key { tint: accent; text: "ok above 22%" }
+        Key { tint: yellow; text: "warm under 22%" }
+        Key { tint: red; text: "tight under 12%" }
+      }
+
+      // ---- where it went
+      Box { height: 1; background: alpha(foreground, 0.08) }
+
+      Row {
+        align: center
+        Text { text: "by region"; style: muted; fontSize: 9; letterSpacing: 1 }
+        Spacer { weight: 1 }
+        Text { text: "share of ${fmtBytes(total)}"; style: muted; fontSize: 9 }
+      }
+
+      Column {
+        gap: 7
+        Bar { name: "available"; value: avail; most: total; tint: warn }
+        Bar { name: "apps (anon)"; value: anon; most: total; tint: magenta }
+        Bar { name: "cached"; value: cache; most: total; tint: blue }
+        Bar { name: "reclaimable"; value: reclaim; most: total; tint: green }
+        Bar { name: "slab"; value: slab; most: total; tint: muted }
+        Bar { name: "swap used"; value: swapUsed; most: swapTotal > 0 ? swapTotal : 1; tint: swapPct > 60 ? red : orange }
+      }
+
+      // ---- and who is holding it
+      Box { height: 1; background: alpha(foreground, 0.08) }
+
+      Row {
+        align: center
+        Text { text: "holding the most"; style: muted; fontSize: 9; letterSpacing: 1 }
+        Spacer { weight: 1 }
+        Text { text: "stop asks twice"; style: muted; fontSize: 9 }
+      }
+
+      Column {
+        gap: 0
+        weight: 1
+        lazy: true
+        for p in procs key p.pid {
+          Row {
+            gap: 8
+            align: center
+            padding: [2, 0]
+            Text { text: p.name; fontSize: 12; weight: 1; maxLines: 1 }
+            Text { text: "${round(p.rss / (total > 0 ? total : 1) * 100, 1)}%"; fontSize: 10; color: muted; width: 44; align: end }
+            Text { text: fmtBytes(p.rss); fontSize: 11; color: muted; width: 56; align: end }
+            Text {
+              text: armed == p.pid ? "sure?" : "stop"
+              fontSize: 11
+              width: 52
+              align: center
+              color: armed == p.pid ? red : muted
+              padding: [4, 6]
+              radius: 6
+              background: alpha(red, armed == p.pid ? 0.16 : 0)
+
+              onTap: {
+                if armed == p.pid {
+                  run("kill ${sh(p.pid)}")
+                  armed = 0
+                  refresh()
+                } else {
+                  armed = p.pid
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // ---- the other thing that fills up
+      Box { height: 1; background: alpha(foreground, 0.08) }
+
+      Row {
+        gap: 10
+        align: center
+        Text { text: "disk"; style: muted; fontSize: 9; letterSpacing: 1; width: 40 }
+        Progress {
+          value: diskUsedPct
+          max: 100
+          weight: 1
+          fill: width
+          height: 5
+          color: diskUsedPct > 90 ? red : accent
+        }
+        Text {
+          text: diskTotal > 0 ? "${fmtBytes(diskFree)} free of ${fmtBytes(diskTotal)}" : "…"
+          fontSize: 10
+          style: muted
+        }
+        Text { text: "refresh"; fontSize: 11; color: accent; padding: [4, 6]; radius: 6; onTap: refresh() }
+      }
+    }
+  }
+}
