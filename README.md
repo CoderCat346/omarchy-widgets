@@ -78,6 +78,30 @@ app "notes" {
 }
 ```
 
+### How an app looks
+
+An app is part of Omarchy, so its own panels, cards and buttons follow the user's style instead of a
+phone app's:
+
+- No fixed rounded corners. Round a shape by the user's corner style, `radius: 8 * corners` for a
+  card and `3 * corners` for a chip, which is square on Omarchy (`corners` is 0). A `radius: 16` card
+  looks out of place next to everything else.
+- No see-through black or white "glass" cards (`background: alpha(black, 0.4)` with a rounded border)
+  as the default panel. Use the theme's colors (`surface`, `border`, `accent`) for a tool, or the
+  colors of the app's own art for a game.
+
+A game draws its own world, so its menus, HUD and buttons are made to fit that world, not laid over it as
+a generic app sheet:
+
+- Shapes from the art. `simonschubert/voxel-rally` is built of boxes, so its buttons and panels are
+  square solid blocks on a darker 5 dp "ledge" (a `Spacer` under them), and a pressed button sinks onto it.
+  A pixel-art game gets hard pixel edges; a neon one thin glowing lines.
+- A font that fits, by URL from Google Fonts, like `simonschubert/sunset-heist`'s Anton or voxel-rally's
+  Silkscreen (`let PIX = "https://raw.githubusercontent.com/google/fonts/main/ofl/silkscreen/Silkscreen-Regular.ttf"`,
+  then `font: PIX`, in Canvas `text()` too). Without one, a game shows the theme's terminal font.
+- Big controls a thumb finds without looking (a held button uses `onPress` and `onRelease`), and words
+  kept short.
+
 Check it with `java -jar tools/owl.jar review . apps/<you>/<name>/app.owl`. Its previews are
 pictures of the whole view at a phone's size, which `scripts/store-previews.sh` makes too. An app that
 uses theme colors gets `previews/<theme>.webp` like a widget, not only `preview.png`. A widget

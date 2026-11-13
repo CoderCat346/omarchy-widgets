@@ -306,5 +306,7 @@ and the message goes to `.errors/`.
   Canvas (`rect(x, y, w, h, radius: 8 * corners)`). The tile and bordered Boxes follow it on
   their own; a fixed `radius`, a clipped Box, an Image or a Canvas shape doesn't. Needs
   `meta { owl: 6 }`. On the desktop it's always 0, since Omarchy is square.
+- Apps and games: no fixed `radius` or see-through "glass" cards either; a game styles its menus and
+  buttons after its own art and sets a font. See "How an app looks" in the store's README.
 - Look at the example widgets in this folder for patterns: `90-analog-clock` (Canvas),
   `91-focus` (state and buttons), `92-aurora` (Shader), `93-latency` (stream).
