@@ -1,0 +1,1054 @@
+app "voxel rally" {
+  meta { owl: 22; description: "A 3D voxel racer: tilt the phone to steer, hold gas and brake, and race three rivals over three laps of a circuit, a pine forest, a red canyon and a snowy pass"; version: "1.0"; license: "MIT"; category: "games" }
+  // How it works: each track is a loop of 120 points round the middle of its world, from a radius that rises and
+  // falls with a few sine waves (so it never crosses itself). The road, its curbs, the fences and the start line
+  // are meshes built from those points once per track; the trees, rocks and mountains are boxes, put together into
+  // a dozen meshes by where they stand, so the ones behind the camera are skipped whole. Nothing is sorted by a
+  // depth buffer, so the world is drawn in layers, each its own scene: the far plain, the mountains, the ground,
+  // the road, then everything that stands on it.
+  //
+  // `every frame` moves the car by its speed times dt. The car keeps its velocity and the tires pull it round to
+  // where it points, less on dirt and much less on snow, so it slides. It knows which segment of the track it's
+  // on and looks only a few ahead for the next, which also counts the laps. The rivals ride the track at a
+  // distance along it, slowing for the bends ahead and catching up when far behind.
+  //
+  // A race pays coins by place, more for a new best time; the garage spends them on the engine, turbo and tires (five
+  // levels each, which the physics read) and on the car's paint, stripes, spoiler and rims, which build its mesh. The
+  // rivals get a little faster as the car does, so a race stays a race.
+  title: ""
+  statusBar: false
+  edge: true
+  fps: mode == "menu" || mode == "garage" ? 30 : 60
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+    <rect width="256" height="256" rx="56" fill="#8ec9ee"/>
+    <path d="M0 150H256V200A56 56 0 0 1 200 256H56A56 56 0 0 1 0 200Z" fill="#5fb04a"/>
+    <path d="M96 150H160L200 256H56Z" fill="#4a4d55"/>
+    <path d="M124 160H132V176H124ZM122 196H134V218H122Z" fill="#f2f2f2"/>
+    <path d="M20 112H44V150H20ZM212 104H236V150H212Z" fill="#2f6b34"/>
+    <path d="M28 96H36V112H28ZM220 88H228V104H220Z" fill="#3d8040"/>
+    <path d="M84 176H172V214H84Z" fill="#e8412f"/>
+    <path d="M100 152H156V180H100Z" fill="#c23424"/>
+    <path d="M106 158H150V176H106Z" fill="#1e2430"/>
+    <path d="M76 204H98V230H76ZM158 204H180V230H158Z" fill="#17171a"/>
+    <path d="M92 196H108V204H92ZM148 196H164V204H148Z" fill="#ff5a4a"/>
+  </svg>"""
+
+  source m = android.motion
+
+  // "menu", "garage", "count" (the lights before the start), "race" or "done"
+  state mode = "menu"
+  state env = 0
+  // the best race and lap times by track id
+  state best = {} persist
+  state bestLap = {} persist
+  state gt = 0
+  // when the race starts (gt)
+  state t0 = 0
+  // the player: position, heading in degrees (0 toward +z, 90 toward +x) and velocity
+  state px = 0
+  state pz = 0
+  state ph = 0
+  state pvx = 0
+  state pvz = 0
+  // how far right of the middle of the road, the segment and how far along it, and the distance raced in segments
+  state pd = 0
+  state si = 0
+  state su = 0
+  state prog = 0
+  state camH = 0
+  state gas = false
+  state brake = false
+  state left = false
+  state right = false
+  // the tilt that counts as straight ahead
+  state restX = 0
+  state rivals = []
+  // each finished lap's time, the place and time at the finish, and when the last lap was called out
+  state laps = []
+  state place = 0
+  state finT = 0
+  state lapAt = -100
+  state newBest = false
+  // Coins, the tuning levels, the parts bought (beyond the free ones) and what the car wears now; what the last race paid.
+  state coins = 0 persist
+  state lv = {eng: 0, turbo: 0, tires: 0} persist
+  state owned = [] persist
+  state look = {paint: 0, stripe: 1, spoiler: 1, rim: 0} persist
+  state earned = 0
+  // the garage's tab, and a word when something can't be bought
+  state tab = "tune"
+  state msg = ""
+  state msgAt = -100
+  // Smoke, dust and sparks off the rear wheels: {x, y, z, vx, vy, vz, t (age), l (life), k ("s" smoke, "p" spark)}.
+  state fx = []
+  // bumped to start a race
+  state go = 0
+  // set by the store's screenshots (screens.txt) to hold a scene still while it's drawn in each theme
+  state still = false
+
+  let tilted = m.available == true
+  let LAPS = 3
+  let N = 120
+  let TOP = 48
+  let ACC = 20
+  let CARC = [#e8412f, #2f6fe8, #f2c230, #33b25a]
+  let CARD = [#a82a1e, #1f4fae, #b88e1c, #22813f]
+  // The garage: tuning, five levels each at these prices, and the parts of the car's look (a part priced 0 is free).
+  let PRIZE = [400, 250, 150, 80]
+  let COST = [150, 300, 550, 900, 1400]
+  let UPG = [{id: "eng", n: "ENGINE"}, {id: "turbo", n: "TURBO"}, {id: "tires", n: "TIRES"}]
+  let PAINTS = [{n: "RED", c: #e8412f, d: #a82a1e, s: #f4f4f4, p: 0}, {n: "ORANGE", c: #f08a24, d: #b0601a, s: #f4f4f4, p: 100}, {n: "LIME", c: #8bd43a, d: #5e9a22, s: #1b1b1e, p: 100}, {n: "PURPLE", c: #8a4fe0, d: #5e32a8, s: #f4f4f4, p: 150}, {n: "WHITE", c: #eef0f4, d: #b8bcc6, s: #e8412f, p: 150}, {n: "BLACK", c: #2a2c32, d: #17181c, s: #ffd34a, p: 200}, {n: "PINK", c: #ff6fb0, d: #c24a84, s: #f4f4f4, p: 200}, {n: "GOLD", c: #e6b83a, d: #a8841a, s: #1b1b1e, p: 500}]
+  let RIMS = [{n: "STOCK", c: #4a4a50, p: 0}, {n: "CHROME", c: #d8dde6, p: 200}, {n: "NEON", c: #5cdc5a, p: 300}, {n: "GOLD", c: #f2c230, p: 400}]
+  let STYLE = [
+    {k: "paint", n: "PAINT", opts: PAINTS},
+    {k: "stripe", n: "STRIPES", opts: [{n: "NONE", p: 0}, {n: "HOOD", p: 0}, {n: "TWIN", p: 200}]},
+    {k: "spoiler", n: "SPOILER", opts: [{n: "NONE", p: 0}, {n: "LIP", p: 0}, {n: "WING", p: 250}, {n: "GT WING", p: 450}]},
+    {k: "rim", n: "RIMS", opts: RIMS}
+  ]
+  let PAINT = PAINTS[look.paint ?? 0]
+  // What the tuning does: top speed, pick-up, and the tires' grip (on and off the road) and steering.
+  let PTOP = TOP * (1 + 0.06 * lv.eng)
+  let PACC = ACC * (1 + 0.15 * lv.turbo)
+  let GRIPK = pow(0.55, lv.tires)
+  let TURNK = 1 + 0.06 * lv.tires
+  let OFFK = 0.05 * lv.tires
+  let RIVK = 1 + (lv.eng + lv.turbo + lv.tires) * 0.013
+  // The UI is square blocks on darker ledges, like the world, in a blocky pixel font.
+  let PIX = "https://raw.githubusercontent.com/google/fonts/main/ofl/silkscreen/Silkscreen-Regular.ttf"
+  let INK = #1b1b1e
+  let GOLD = #ffd34a
+
+  let ENVS = [
+    {id: "circuit", name: "Grand Circuit", sub: "asphalt, grippy", R: 130, sx: 1.35, a1: 0.18, p1: 0, a2: 0.1, p2: 1.2, a3: 0.05, p3: 0.4, hw: 7,
+      dust: #e4e6ea, sky: #8ec9ee, top: #3f8fd8, sun: #fff4c2, sunDir: [-0.7, 0.2, 0.68], far: #4f9a3f, g1: #5fb04a, g2: #57a544, road: #4a4d55, road2: #52555d, curb: [#e0393b, #f2f2f2], fence: [#e0393b, #f2f2f2], dash: true,
+      gate: #2a2d35, gate2: #e0393b, grip: 0.0008, gripOff: 0.02, offTop: 0.55, lat: 34,
+      kinds: ["tree", "tree", "tree", "bush", "bush", "tires", "rock"], m1: #4d8f45, m1t: #5aa04f, cap: #5aa04f, capK: 9, mh: 0.5, mesa: false},
+    {id: "forest", name: "Pine Forest", sub: "dirt, slides a bit", R: 140, sx: 1.1, a1: 0.12, p1: 0.8, a2: 0.18, p2: 2.1, a3: 0.08, p3: 1.0, hw: 6,
+      dust: #8b6a45, sky: #a9d3c0, top: #5d9c8c, sun: #fff0c8, sunDir: [0.62, 0.17, -0.76], far: #2f5a2b, g1: #3f7a35, g2: #3a7131, road: #8b6a45, road2: #84643f, curb: [#6e5236, #5d452c], fence: [#7a5a38, #6a4c2e], dash: false,
+      gate: #6a4c2e, gate2: #3d8040, grip: 0.012, gripOff: 0.03, offTop: 0.55, lat: 28,
+      kinds: ["pine", "pine", "pine", "pine", "pine", "rock", "bush", "mush"], m1: #3b5f45, m1t: #456c50, cap: #eef3f7, capK: 3, mh: 1.1, mesa: false},
+    {id: "desert", name: "Red Canyon", sub: "sand, fast and wide", R: 150, sx: 1.25, a1: 0.22, p1: 2.0, a2: 0.08, p2: 0.5, a3: 0.06, p3: 1.7, hw: 7,
+      dust: #e8b47c, sky: #f4cf9a, top: #d8743e, sun: #fff2b8, sunDir: [0.78, 0.11, 0.6], far: #c9874f, g1: #e2a866, g2: #dba060, road: #b06a3e, road2: #a8643a, curb: [#7a3e22, #f0d9b0], fence: [#8a5a3a, #6a4428], dash: false,
+      gate: #7a3e22, gate2: #f0d9b0, grip: 0.004, gripOff: 0.02, offTop: 0.6, lat: 30,
+      kinds: ["cactus", "cactus", "cactus", "rock", "rock", "mesa", "scrub"], m1: #b45a32, m1t: #c7703f, cap: #c7703f, capK: 9, mh: 0.9, mesa: true},
+    {id: "snow", name: "Frost Pass", sub: "snow, slippery", R: 135, sx: 1, a1: 0.15, p1: 1.4, a2: 0.15, p2: 0.3, a3: 0.07, p3: 2.5, hw: 6.5,
+      dust: #ffffff, sky: #dbe7f2, top: #8fb2d6, sun: #ffffff, sunDir: [-0.52, 0.26, -0.8], far: #e9f0f7, g1: #f3f7fb, g2: #e6eef6, road: #a9b9cb, road2: #b3c2d3, curb: [#d23a3a, #f4f7fb], fence: [#3a6fb0, #f4f7fb], dash: false,
+      gate: #3a6fb0, gate2: #f4f7fb, grip: 0.09, gripOff: 0.15, offTop: 0.65, lat: 20,
+      kinds: ["spine", "spine", "spine", "spine", "rock", "ice", "snowman"], m1: #8ea4b8, m1t: #9cb1c4, cap: #f4f8fc, capK: 2, mh: 1.2, mesa: false}
+  ]
+  let E = ENVS[env]
+  let HW = E.hw
+  // where the fences stand, either side of the middle, and how far out the car can go
+  let FO = HW + 8.5
+  let LIM = FO - 1.3
+  // The light comes from the sun's side; the far land and the fog fade into a bright haze at the horizon, the bottom of
+  // the sky's gradient, so the world has no edge.
+  let LIGHT = [E.sunDir[0], 1.2, E.sunDir[2]]
+  let HAZE = mix(E.sky, #ffffff, 0.35)
+
+  // A box: eight corners of a unit box standing on y 0, and its faces (top, then the sides), counterclockwise seen
+  // from outside. Boxes are {x, y, z, w, h, d, c (sides), t (top)}.
+  let CORN = [[-1, 0, -1], [1, 0, -1], [1, 0, 1], [-1, 0, 1], [-1, 1, -1], [1, 1, -1], [1, 1, 1], [-1, 1, 1]]
+  let BF = [[4, 7, 6, 5], [3, 2, 6, 7], [1, 0, 4, 5], [2, 1, 5, 6], [0, 3, 7, 4]]
+
+  // The track: N points, each with its unit tangent (tx, tz), its right (nx, nz), its heading h, and the step to the
+  // next point (ex, ez, len, its heading hs and how much the heading turns into the next, dh).
+  let RAWP = range(N).map(i => [2 * pi * i / N].map(a => [a, E.R * (1 + E.a1 * sin(2 * a + E.p1) + E.a2 * sin(3 * a + E.p2) + E.a3 * sin(5 * a + E.p3))])[0]).map(q => [cos(q[0]) * q[1] * E.sx, sin(q[0]) * q[1]])
+  let T0 = range(N).map(i => [[RAWP[i], RAWP[(i + 1) % N], RAWP[(i + N - 1) % N]]].map(q => [sqrt(pow(q[1][0] - q[2][0], 2) + pow(q[1][1] - q[2][1], 2))].map(l => {i: i, x: q[0][0], z: q[0][1], tx: (q[1][0] - q[2][0]) / l, tz: (q[1][1] - q[2][1]) / l, ex: q[1][0] - q[0][0], ez: q[1][1] - q[0][1]})[0])[0])
+  let T1 = T0.map(a => merge(a, {nx: -a.tz, nz: a.tx, h: deg(atan2(a.tx, a.tz)), l2: a.ex * a.ex + a.ez * a.ez, len: sqrt(a.ex * a.ex + a.ez * a.ez), hs: deg(atan2(a.ex, a.ez))}))
+  let T = T1.map(a => merge(a, {dh: ((T1[(a.i + 1) % N].hs - a.hs + 540) % 360) - 180}))
+  // How fast a bend can be taken, and that looking a few segments ahead: what the rivals aim for.
+  let SPD = T.map(a => [abs(a.dh) / a.len * pi / 180].map(c => c < 0.0001 ? TOP : min(TOP * 0.98, sqrt(E.lat / c)))[0])
+  let SPDA = range(N).map(i => min(range(6).map(k => SPD[(i + k) % N])))
+  // The track squeezed into 0..1 for the little map.
+  let MINX = min(T.map(a => a.x))
+  let MINZ = min(T.map(a => a.z))
+  let SPAN = max(max(T.map(a => a.x)) - MINX, max(T.map(a => a.z)) - MINZ)
+  let MAPW = (max(T.map(a => a.x)) - MINX) / SPAN
+  let MAPH = (max(T.map(a => a.z)) - MINZ) / SPAN
+  let TN = T.map(a => [(a.x - MINX) / SPAN, (a.z - MINZ) / SPAN])
+
+  // The road: two points a segment, left then right, so each quad faces up.
+  let ROAD = mesh(flatten(T.map(a => [[a.x - a.nx * HW, 0.02, a.z - a.nz * HW], [a.x + a.nx * HW, 0.02, a.z + a.nz * HW]])), range(N).map(i => [2 * i, 2 * i + 1, (2 * i + 3) % (2 * N), (2 * i + 2) % (2 * N)]), range(N).map(i => i % 2 == 0 ? E.road : E.road2))
+  let CURBS = mesh(flatten(T.map(a => [[a.x - a.nx * HW, 0.04, a.z - a.nz * HW], [a.x - a.nx * (HW + 1.4), 0.04, a.z - a.nz * (HW + 1.4)], [a.x + a.nx * HW, 0.04, a.z + a.nz * HW], [a.x + a.nx * (HW + 1.4), 0.04, a.z + a.nz * (HW + 1.4)]])), flatten(range(N).map(i => [[4 * i + 1, 4 * i, (4 * i + 4) % (4 * N), (4 * i + 5) % (4 * N)], [4 * i + 2, 4 * i + 3, (4 * i + 7) % (4 * N), (4 * i + 6) % (4 * N)]])), flatten(range(N).map(i => [E.curb[i % 2], E.curb[i % 2]])))
+  let DASH = mesh(flatten(range(0, N, 2).map(i => T[i]).map(a => [[a.x - a.nx * 0.18, 0.05, a.z - a.nz * 0.18], [a.x + a.nx * 0.18, 0.05, a.z + a.nz * 0.18], [a.x + a.nx * 0.18 + a.ex * 0.45, 0.05, a.z + a.nz * 0.18 + a.ez * 0.45], [a.x - a.nx * 0.18 + a.ex * 0.45, 0.05, a.z - a.nz * 0.18 + a.ez * 0.45]])), range(N / 2).map(k => [4 * k, 4 * k + 1, 4 * k + 2, 4 * k + 3]), range(N / 2).map(k => #f2f2f2))
+  // The start line: two rows of checks across the road at point 0.
+  let CHK = 2 * HW / 8
+  let START = [T[0]].map(a => mesh(flatten(range(16).map(k => [[a.x + a.nx * (-HW + (k % 8) * CHK) + a.tx * floor(k / 8) * CHK, 0.06, a.z + a.nz * (-HW + (k % 8) * CHK) + a.tz * floor(k / 8) * CHK]].map(p => [p, [p[0] + a.nx * CHK, 0.06, p[2] + a.nz * CHK], [p[0] + a.nx * CHK + a.tx * CHK, 0.06, p[2] + a.nz * CHK + a.tz * CHK], [p[0] + a.tx * CHK, 0.06, p[2] + a.tz * CHK]])[0])), range(16).map(k => [4 * k, 4 * k + 1, 4 * k + 2, 4 * k + 3]), range(16).map(k => (k + floor(k / 8)) % 2 == 0 ? #f4f4f4 : #1b1b1e)))[0]
+  // A fence each side, a strip standing up; seen from both sides.
+  // Three panels a segment, so each sorts near where it stands (there's no depth buffer).
+  let FENCE = [-1, 1].map(sd => mesh(flatten(flatten(T.map(a => [[a, T[(a.i + 1) % N]]].map(ab => range(3).map(k => [ab[0].x + ab[0].ex * k / 3 + lerp(ab[0].nx, ab[1].nx, k / 3) * FO * sd, ab[0].z + ab[0].ez * k / 3 + lerp(ab[0].nz, ab[1].nz, k / 3) * FO * sd]))[0])).map(q => [[q[0], 0, q[1]], [q[0], 1.1, q[1]]])), range(3 * N).map(i => [2 * i, (2 * i + 2) % (6 * N), (2 * i + 3) % (6 * N), 2 * i + 1]), range(3 * N).map(i => E.fence[floor(i / 3) % 2])))
+
+  // The ground: a checker of two greens (or sands, or snows), 14 cells of 46 a side.
+  let GROUND = terrain(range(15).map(r => range(15).map(c => 0)), range(14).map(r => range(14).map(c => hash(r, c, E.id) < 0.5 ? E.g1 : E.g2)))
+  let TILE = plane(1)
+
+  let CLR = (FO + 3) * (FO + 3)
+  // every second point of the track, for the scenery to keep clear of
+  let TC = range(0, N, 2).map(i => T[i])
+  // Scenery: things by the track, each a few boxes, kept clear of the fences and of the start.
+  let OBJS = range(200).map(i => [T[floor(hash(i, E.id, 1) * N)]].map(a => [(hash(i, E.id, 2) < 0.5 ? -1 : 1) * (FO + 4 + pow(hash(i, E.id, 3), 1.4) * 80)].map(o => {x: a.x + a.nx * o + (hash(i, E.id, 6) - 0.5) * 8, z: a.z + a.nz * o + (hash(i, E.id, 7) - 0.5) * 8, r: hash(i, E.id, 4), s: 0.8 + hash(i, E.id, 5) * 0.6})[0])[0]).filter(o => o.x * o.x + o.z * o.z < 330 * 330 && (o.x - T[0].x) * (o.x - T[0].x) + (o.z - T[0].z) * (o.z - T[0].z) > 34 * 34 && all(TC, c => (o.x - c.x) * (o.x - c.x) + (o.z - c.z) * (o.z - c.z) > CLR))
+  let BOXES = flatten(OBJS.map(o => [[o.x, o.z, o.s, E.kinds[floor(o.r * len(E.kinds))]]].map(v => v[3] == "tree" ? [
+      {x: v[0], y: 0, z: v[1], w: 0.8 * v[2], h: 2 * v[2], d: 0.8 * v[2], c: #6b4a2b, t: #6b4a2b, nt: true},
+      {x: v[0], y: 2 * v[2], z: v[1], w: 3.6 * v[2], h: 3 * v[2], d: 3.6 * v[2], c: #3f9a3a, t: #52b04a},
+      {x: v[0], y: 5 * v[2], z: v[1], w: 2 * v[2], h: 1 * v[2], d: 2 * v[2], c: #46a43f, t: #5cbc53}
+    ] : (v[3] == "bush" ? [
+      {x: v[0], y: 0, z: v[1], w: 2.2 * v[2], h: 1.2 * v[2], d: 2 * v[2], c: #3d8a36, t: #4fa346}
+    ] : (v[3] == "tires" ? [
+      {x: v[0], y: 0, z: v[1], w: 1.4, h: 0.5, d: 1.4, c: #1d1d1f, t: #2b2b2e},
+      {x: v[0], y: 0.5, z: v[1], w: 1.4, h: 0.5, d: 1.4, c: #e0393b, t: #2b2b2e},
+      {x: v[0], y: 1, z: v[1], w: 1.4, h: 0.5, d: 1.4, c: #1d1d1f, t: #2b2b2e},
+      {x: v[0] + 1.5, y: 0, z: v[1], w: 1.4, h: 0.5, d: 1.4, c: #f2f2f2, t: #2b2b2e},
+      {x: v[0] + 1.5, y: 0.5, z: v[1], w: 1.4, h: 0.5, d: 1.4, c: #1d1d1f, t: #2b2b2e}
+    ] : (v[3] == "rock" ? [
+      {x: v[0], y: 0, z: v[1], w: 2.6 * v[2], h: 1.4 * v[2], d: 2.2 * v[2], c: E.id == "desert" ? #a0603a : #8c8c92, t: E.id == "snow" ? #f4f8fc : (E.id == "desert" ? #b8744a : #a2a2a8)},
+      {x: v[0] + 0.6 * v[2], y: 1.4 * v[2], z: v[1] - 0.3 * v[2], w: 1.4 * v[2], h: 0.8 * v[2], d: 1.2 * v[2], c: E.id == "desert" ? #a0603a : #8c8c92, t: E.id == "snow" ? #f4f8fc : (E.id == "desert" ? #b8744a : #a2a2a8)}
+    ] : (v[3] == "pine" || v[3] == "spine" ? [
+      {x: v[0], y: 0, z: v[1], w: 0.9 * v[2], h: 1.6 * v[2], d: 0.9 * v[2], c: #5d3f25, t: #5d3f25, nt: true},
+      {x: v[0], y: 1.6 * v[2], z: v[1], w: 4.4 * v[2], h: 2 * v[2], d: 4.4 * v[2], c: v[3] == "spine" ? #2c5a3f : #2f6b34, t: v[3] == "spine" ? #f4f8fc : #3d8040},
+      {x: v[0], y: 3.6 * v[2], z: v[1], w: 3.2 * v[2], h: 1.7 * v[2], d: 3.2 * v[2], c: v[3] == "spine" ? #2c5a3f : #2f6b34, t: v[3] == "spine" ? #f4f8fc : #3d8040},
+      {x: v[0], y: 5.3 * v[2], z: v[1], w: 2 * v[2], h: 1.5 * v[2], d: 2 * v[2], c: v[3] == "spine" ? #2c5a3f : #2f6b34, t: v[3] == "spine" ? #f4f8fc : #3d8040},
+      {x: v[0], y: 6.8 * v[2], z: v[1], w: 0.9 * v[2], h: 1 * v[2], d: 0.9 * v[2], c: v[3] == "spine" ? #f4f8fc : #2f6b34, t: v[3] == "spine" ? #f4f8fc : #3d8040}
+    ] : (v[3] == "mush" ? [
+      {x: v[0], y: 0, z: v[1], w: 0.6 * v[2], h: 1.2 * v[2], d: 0.6 * v[2], c: #efe6d4, t: #efe6d4, nt: true},
+      {x: v[0], y: 1.2 * v[2], z: v[1], w: 2.2 * v[2], h: 0.7 * v[2], d: 2.2 * v[2], c: #d33b2c, t: #e04a3a},
+      {x: v[0] + 0.4 * v[2], y: 1.9 * v[2], z: v[1] + 0.3 * v[2], w: 0.4 * v[2], h: 0.08, d: 0.4 * v[2], c: #f8f4ea, t: #f8f4ea}
+    ] : (v[3] == "cactus" ? [
+      {x: v[0], y: 0, z: v[1], w: 0.9 * v[2], h: 4 * v[2], d: 0.9 * v[2], c: #3c8a46, t: #4da358},
+      {x: v[0] - 0.9 * v[2], y: 1.6 * v[2], z: v[1], w: 0.9 * v[2], h: 0.6 * v[2], d: 0.6 * v[2], c: #3c8a46, t: #4da358},
+      {x: v[0] - 1.2 * v[2], y: 2.2 * v[2], z: v[1], w: 0.6 * v[2], h: 1.1 * v[2], d: 0.6 * v[2], c: #3c8a46, t: #4da358},
+      {x: v[0] + 0.9 * v[2], y: 2.3 * v[2], z: v[1], w: 0.9 * v[2], h: 0.6 * v[2], d: 0.6 * v[2], c: #3c8a46, t: #4da358},
+      {x: v[0] + 1.2 * v[2], y: 2.9 * v[2], z: v[1], w: 0.6 * v[2], h: 0.8 * v[2], d: 0.6 * v[2], c: #3c8a46, t: #4da358}
+    ] : (v[3] == "mesa" ? [
+      {x: v[0], y: 0, z: v[1], w: 9 * v[2], h: 4 * v[2], d: 7 * v[2], c: #b5582f, t: #c96a3c},
+      {x: v[0] + v[2], y: 4 * v[2], z: v[1], w: 6 * v[2], h: 2.5 * v[2], d: 5 * v[2], c: #9e4a28, t: #d07a48}
+    ] : (v[3] == "scrub" ? [
+      {x: v[0], y: 0, z: v[1], w: 1.4 * v[2], h: 0.9 * v[2], d: 1.4 * v[2], c: #8a6a3c, t: #9c7a48}
+    ] : (v[3] == "ice" ? [
+      {x: v[0], y: 0, z: v[1], w: 2.4 * v[2], h: 1.6 * v[2], d: 2 * v[2], c: #a9d6ec, t: #e6f6fc},
+      {x: v[0] + 0.5, y: 1.6 * v[2], z: v[1], w: 1.2 * v[2], h: 1 * v[2], d: 1.1 * v[2], c: #a9d6ec, t: #e6f6fc}
+    ] : [
+      {x: v[0], y: 0, z: v[1], w: 2 * v[2], h: 1.8 * v[2], d: 2 * v[2], c: #f4f7fb, t: #ffffff},
+      {x: v[0], y: 1.8 * v[2], z: v[1], w: 1.4 * v[2], h: 1.3 * v[2], d: 1.4 * v[2], c: #f4f7fb, t: #ffffff},
+      {x: v[0], y: 3.1 * v[2], z: v[1], w: 1 * v[2], h: 1 * v[2], d: 1 * v[2], c: #f4f7fb, t: #ffffff},
+      {x: v[0], y: 3.5 * v[2], z: v[1] + 0.75 * v[2], w: 0.2, h: 0.2, d: 0.5 * v[2], c: #f08a24, t: #f08a24},
+      {x: v[0], y: 4.1 * v[2], z: v[1], w: 0.9 * v[2], h: 0.6 * v[2], d: 0.9 * v[2], c: #222226, t: #222226}
+    ]))))))))))[0]))
+  // A dozen meshes of them by the angle they stand at round the middle, at most 120 boxes each.
+  // A box under another (a trunk, a stem, a post) has no top: it would be hidden, and could sort over what hides it.
+  let SECT = range(12).map(k => take(BOXES.filter(b => floor((atan2(b.z, b.x) + pi) / (2 * pi) * 12) % 12 == k), 120)).filter(bs => len(bs) > 0).map(bs => mesh(flatten(bs.map(b => CORN.map(c => [b.x + c[0] * b.w / 2, b.y + c[1] * b.h, b.z + c[2] * b.d / 2]))), flatten(bs.map((b, i) => drop(BF, b.nt == true ? 1 : 0).map(f => f.map(k => k + 8 * i)))), flatten(bs.map(b => b.nt == true ? [b.c, b.c, b.c, b.c] : [b.t, b.c, b.c, b.c, b.c]))))
+
+  // Two rings round the world, overlapping so there's never a gap to the sky: near, mountains (or hills, or mesas)
+  // in steps of boxes; far, taller and lost in the haze (on the circuit, a city's towers). Six meshes a ring by angle,
+  // so the ones behind the camera are skipped, and a few clouds.
+  let NEAR = range(32).map(i => [2 * pi * (i + hash(i, E.id, 9) * 0.5) / 32].map(a => {k: floor(i / 6), x: cos(a) * (480 + hash(i, E.id, 10) * 50), z: sin(a) * (480 + hash(i, E.id, 10) * 50), w: 130 + hash(i, E.id, 11) * 70, h: (28 + hash(i, E.id, 12) * 40) * E.mh})[0])
+  let NEARB = flatten(NEAR.map(q => range(4).map(k => {k: q.k, x: q.x, y: q.h * k / 4, z: q.z, w: q.w * (1 - k * (E.mesa ? 0.05 : 0.22)), h: q.h / 4, d: q.w * 0.85 * (1 - k * (E.mesa ? 0.05 : 0.22)), c: k >= E.capK ? E.cap : E.m1, t: k >= E.capK - 1 ? E.cap : E.m1t})))
+  let FARB = E.id == "circuit" ? range(64).map(i => [2 * pi * (i + hash(i, 41) * 0.7) / 64].map(a => [cos(a) * (690 + hash(i, 42) * 90), sin(a) * (690 + hash(i, 42) * 90), 22 + hash(i, 43) * 26, 30 + pow(hash(i, 44), 2) * 110]).map(q => {k: floor(i / 11), x: q[0], y: 0, z: q[1], w: q[2], h: q[3], d: q[2], c: mix([#8a9bb8, #a7b4c8, #7d8ba6][i % 3], HAZE, 0.35), t: mix(#c8d2e0, HAZE, 0.35)})[0]) : flatten(range(26).map(i => [2 * pi * (i + hash(i, E.id, 13) * 0.5) / 26].map(a => {k: floor(i / 5), x: cos(a) * (720 + hash(i, E.id, 14) * 60), z: sin(a) * (720 + hash(i, E.id, 14) * 60), w: 240 + hash(i, E.id, 15) * 90, h: (70 + hash(i, E.id, 16) * 80) * E.mh})[0]).map(q => range(4).map(k => {k: q.k, x: q.x, y: q.h * k / 4, z: q.z, w: q.w * (1 - k * (E.mesa ? 0.05 : 0.2)), h: q.h / 4, d: q.w * 0.85 * (1 - k * (E.mesa ? 0.05 : 0.2)), c: mix(k >= E.capK ? E.cap : E.m1, HAZE, 0.45), t: mix(k >= E.capK - 1 ? E.cap : E.m1t, HAZE, 0.45)})))
+  let CLOUDS = flatten(range(14).map(i => [2 * pi * i / 14 + hash(i, 21)].map(a => [cos(a) * (120 + hash(i, 22) * 260), sin(a) * (120 + hash(i, 22) * 260), 70 + hash(i, 23) * 40, 18 + hash(i, 24) * 24])[0]).map(q => [{x: q[0], y: q[2], z: q[1], w: q[3], h: 4, d: q[3] * 0.55, c: #f4f8fc, t: #ffffff}, {x: q[0] + q[3] * 0.1, y: q[2] + 4, z: q[1], w: q[3] * 0.55, h: 3.5, d: q[3] * 0.35, c: #f4f8fc, t: #ffffff}]))
+  let FARM = range(6).map(k => FARB.filter(b => b.k == k)).filter(bs => len(bs) > 0).map(bs => mesh(flatten(bs.map(b => CORN.map(c => [b.x + c[0] * b.w / 2, b.y + c[1] * b.h, b.z + c[2] * b.d / 2]))), flatten(bs.map((b, i) => BF.map(f => f.map(k => k + 8 * i)))), flatten(bs.map(b => [b.t, b.c, b.c, b.c, b.c]))))
+  let BACK = range(6).map(k => NEARB.filter(b => b.k == k)).filter(bs => len(bs) > 0).map(bs => mesh(flatten(bs.map(b => CORN.map(c => [b.x + c[0] * b.w / 2, b.y + c[1] * b.h, b.z + c[2] * b.d / 2]))), flatten(bs.map((b, i) => BF.map(f => f.map(k => k + 8 * i)))), flatten(bs.map(b => [b.t, b.c, b.c, b.c, b.c]))))
+  // Clouds are seen from below, so theirs have a bottom too.
+  let CLOUDM = mesh(flatten(CLOUDS.map(b => CORN.map(c => [b.x + c[0] * b.w / 2, b.y + c[1] * b.h, b.z + c[2] * b.d / 2]))), flatten(CLOUDS.map((b, i) => (BF + [[0, 1, 2, 3]]).map(f => f.map(k => k + 8 * i)))), flatten(CLOUDS.map(b => [b.t, b.c, b.c, b.c, b.c, #e8eef6])))
+
+  // The start gantry, and on the circuit a grandstand full of people on the left; in the start's own frame: forward +z, left +x.
+  let STANDS = E.id != "circuit" ? [] : flatten(range(4).map(k => [{x: FO + 3.5 + k * 2.2, y: 0, z: 0, w: 2.2, h: 1.2 + k * 1.2, d: 40, c: #7d828c, t: #a9aeb8}] + range(14).map(j => {x: FO + 3.5 + k * 2.2, y: 1.2 + k * 1.2, z: -18 + j * 2.7 + hash(j, k, 31) * 0.8, w: 0.8, h: 0.9 + hash(j, k, 32) * 0.3, d: 0.8, c: CARC[floor(hash(j, k, 33) * 4)], t: #e8c8a0}))) + [{x: FO + 8, y: 7.4, z: 0, w: 11, h: 0.5, d: 42, c: #d8dce4, t: #e0393b}, {x: FO + 12.8, y: 0, z: -19, w: 0.6, h: 7.4, d: 0.6, c: #555a63, t: #555a63}, {x: FO + 12.8, y: 0, z: 19, w: 0.6, h: 7.4, d: 0.6, c: #555a63, t: #555a63}]
+  let GATE = [[{x: FO + 1, y: 0, z: 0, w: 1.2, h: 8.6, d: 1.2, c: E.gate, t: E.gate, nt: true}, {x: -FO - 1, y: 0, z: 0, w: 1.2, h: 8.6, d: 1.2, c: E.gate, t: E.gate, nt: true}, {x: 0, y: 8.6, z: 0, w: 2 * FO + 3.2, h: 1.5, d: 1.2, c: E.gate2, t: E.gate}] + range(8).map(k => {x: -HW + (k + 0.5) * CHK, y: 8.95, z: 0.62, w: CHK * 0.5, h: 0.8, d: 0.05, c: k % 2 == 0 ? #1b1b1e : #f4f4f4, t: #f4f4f4}) + STANDS].map(bs => mesh(flatten(bs.map(b => CORN.map(c => [b.x + c[0] * b.w / 2, b.y + c[1] * b.h, b.z + c[2] * b.d / 2]))), flatten(bs.map((b, i) => drop(BF, b.nt == true ? 1 : 0).map(f => f.map(k => k + 8 * i)))), flatten(bs.map(b => b.nt == true ? [b.c, b.c, b.c, b.c] : [b.t, b.c, b.c, b.c, b.c]))))[0]
+
+  // The cars, facing +z: yours as built in the garage, then the rivals' (stock, in their colors).
+  let SPECS = [{c: PAINT.c, d: PAINT.d, s: PAINT.s, st: look.stripe ?? 1, sp: look.spoiler ?? 1, rim: RIMS[look.rim ?? 0].c}] + range(1, 4).map(n => {c: CARC[n], d: CARD[n], s: #f4f4f4, st: 1, sp: 1, rim: #4a4a50})
+  // Built of real voxels, 0.3 a side on a grid 8 wide, 6 high and 14 long, so every face is small and alike and no
+  // two boxes overlap: sorted by depth without a depth buffer, nothing then pops through anything else (one big
+  // chassis box with wheel boxes poking into it did). Only the faces a voxel shows to the outside are drawn, between
+  // the grid's shared corners (9 by 6 by 15 points: no voxel sits in the bottom layer, by the wheels). Cell n is [i, j, k] = [n / 84, n / 14 % 6, n % 14].
+  let VS = 0.3
+  let VPTS = range(810).map(v => [(floor(v / 90) - 4) * VS, (floor(v / 15) % 6 + 1) * VS, (v % 15 - 7) * VS])
+  let CELLS = range(672).map(n => [floor(n / 84), floor(n / 14) % 6, n % 14])
+  // The faces a voxel can show (up, front +z, back -z, right +x, left -x; never the bottom), each as the step to the
+  // neighbour that would hide it and its corners, counterclockwise from outside, as steps from the voxel's own corner.
+  let VDIR = [
+    {d: [0, 1, 0], f: [[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]]},
+    {d: [0, 0, 1], f: [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]]},
+    {d: [0, 0, -1], f: [[1, 0, 0], [0, 0, 0], [0, 1, 0], [1, 1, 0]]},
+    {d: [1, 0, 0], f: [[1, 0, 1], [1, 0, 0], [1, 1, 0], [1, 1, 1]]},
+    {d: [-1, 0, 0], f: [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]]}
+  ]
+  let GLASS = #1e2430
+  // Round wheels, in the car's own mesh so it stays one model whose faces sort right among themselves: a 10-sided tyre
+  // on an axle along x, beside the body (never in it), its sides a dark ring round a hub in the rim's color. Points
+  // 810 on; WPOS are the wheels' places on a car facing +z.
+  let WR = 0.36
+  let WPOS = [[1.05, 1.35], [-1.05, 1.35], [1.05, -1.35], [-1.05, -1.35]]
+  let WPTS = flatten(WPOS.map(w => flatten([-0.15, 0.15].map(x => range(20).map(k => [w[0] + x, WR + cos(2 * pi * (k % 10) / 10) * (k < 10 ? WR : 0.17), w[1] + sin(2 * pi * (k % 10) / 10) * (k < 10 ? WR : 0.17)])))))
+  let WFACES = flatten(range(4).map(w => [810 + 40 * w].map(o => range(10).map(k => [o + k, o + (k + 1) % 10, o + 20 + (k + 1) % 10, o + 20 + k])
+      + range(10).map(k => [o + 20 + k, o + 20 + (k + 1) % 10, o + 30 + (k + 1) % 10, o + 30 + k])
+      + [range(10).map(k => o + 30 + k)]
+      + range(10).map(k => [o + (k + 1) % 10, o + k, o + 10 + k, o + 10 + (k + 1) % 10])
+      + [range(10).map(k => o + 19 - k)])[0]))
+  // A car's shape by the kind of each voxel (b body, g glass, r roof, p post, s spoiler, e end plate), worked
+  // out for your spoiler and for the rivals' (lip), with the faces each shows; each car then only colors them.
+  let SHAPES = [look.spoiler ?? 1, 1].map(sp => [CELLS.map(c => (c[0] >= 1 && c[0] <= 6 && c[1] >= 1 && c[1] <= 2 ? "b"
+      : (c[0] >= 2 && c[0] <= 5 && c[1] == 3 && c[2] >= 4 && c[2] <= 9 ? "g"
+      : (c[0] >= 2 && c[0] <= 5 && c[1] == 4 && c[2] >= 5 && c[2] <= 9 ? "r"
+      : (c[2] != 0 ? null
+      : (sp == 1 ? (c[1] == 3 && c[0] >= 1 && c[0] <= 6 ? "s" : null)
+      : (sp == 2 ? (c[1] == 3 && (c[0] == 2 || c[0] == 5) ? "p" : (c[1] == 4 && c[0] >= 1 && c[0] <= 6 ? "s" : null))
+      : (sp == 3 ? (c[1] >= 3 && c[1] <= 4 && (c[0] == 2 || c[0] == 5) ? "p" : (c[1] == 5 ? "s" : (c[1] == 4 && (c[0] == 0 || c[0] == 7) ? "e" : null)))
+      : null))))))))].map(G => {g: G, f: flatten(range(672).filter(n => G[n] != null).map(n => range(5).filter(d => [[CELLS[n][0] + VDIR[d].d[0], CELLS[n][1] + VDIR[d].d[1], CELLS[n][2] + VDIR[d].d[2]]].map(b => b[0] < 0 || b[0] > 7 || b[1] > 5 || b[2] < 0 || b[2] > 13 || G[(b[0] * 6 + b[1]) * 14 + b[2]] == null)[0]).map(d => [n, d])))})[0]).map(S => merge(S, {idx: S.f.map(nd => VDIR[nd[1]].f.map(o => ((CELLS[nd[0]][0] + o[0]) * 6 + CELLS[nd[0]][1] + o[1] - 1) * 15 + CELLS[nd[0]][2] + o[2]))}))
+  let CARS = SPECS.map((q, n) => [SHAPES[n == 0 ? 0 : 1]].map(S => mesh(VPTS + WPTS, S.idx + WFACES,
+      S.f.map(nd => [CELLS[nd[0]], S.g[nd[0]], nd[1]]).map(x => x[2] == 0
+        ? ((q.st == 1 && x[1] == "b" && x[0][1] == 2 && x[0][2] >= 10 && (x[0][0] == 3 || x[0][0] == 4)) || (q.st == 2 && (x[1] == "b" || x[1] == "r") && (x[0][0] == 2 || x[0][0] == 5)) ? q.s
+          : ((x[1] == "g" ? GLASS : (x[1] == "b" || x[1] == "e" ? q.c : (x[1] == "p" ? #1b1b1e : q.d)))))
+        : (x[2] == 1 && x[1] == "b" && x[0][1] == 2 && (x[0][0] == 1 || x[0][0] == 6) ? #fff6c0
+        : (x[2] == 1 && x[1] == "b" && x[0][1] == 1 ? #1b1b1e
+        : (x[2] == 2 && x[1] == "b" && x[0][1] == 2 && (x[0][0] <= 2 || x[0][0] >= 5) ? #ff3030
+        : ((x[1] == "g" ? GLASS : (x[1] == "b" || x[1] == "e" ? q.c : (x[1] == "p" ? #1b1b1e : q.d)))))))) + flatten(range(4).map(w => range(10).map(k => #17171a) + range(10).map(k => #2a2a2e) + [q.rim] + range(10).map(k => #2a2a2e) + [q.rim]))))[0])
+  // The garage's turntable: a checkered floor, a round plate, and a camera looking down at the car.
+  let FLOOR = terrain(range(11).map(r => range(11).map(c => 0)), range(10).map(r => range(10).map(c => (r + c) % 2 == 0 ? #2a2d35 : #23252c)))
+  let PLATE = cylinder(24)
+  let GCAM = {eye: [5.6, 2.9, 6.4], look: [0, 0.55, 0], fov: 40, near: 0.5, far: 80}
+
+  // Where the rivals are: along the track by their distance, off the middle by their lane, weaving a little and nudged
+  // aside by a bump (b, springing back); with the way they go and how fast, for bumping them.
+  let RP = rivals.map(r => [((r.s % N) + N) % N].map(q => [[T[floor(q) % N], q - floor(q), clamp(r.lane + sin(r.s * 0.11 + r.c * 2.1) * 2 + (r.b ?? 0), -HW + 1.2, HW - 1.2)]].map(af => {x: af[0].x + af[0].ex * af[1] + af[0].nx * af[2], z: af[0].z + af[0].ez * af[1] + af[0].nz * af[2], h: af[0].hs + af[0].dh * af[1], c: r.c,
+    s: r.s, v: r.v, bv: r.bv ?? 0, le: af[2], len: af[0].len, tx: af[0].ex / af[0].len, tz: af[0].ez / af[0].len, nx: af[0].nx, nz: af[0].nz})[0])[0])
+
+  let chase = mode == "count" || mode == "race" || mode == "done"
+  let spd = sqrt(pvx * pvx + pvz * pvz)
+  // On the menu the cars wait on the grid, yours (as built in the garage) on pole, and the camera swings slowly round
+  // its front and open side (the right, +n), low, so the rivals stay behind it, with the track and the land beyond.
+  let GRIDP = [{s: -1.5, lane: -3, c: 1}, {s: -4.5, lane: 3, c: 2}, {s: -4.5, lane: -3, c: 3}].map(r => [((r.s % N) + N) % N].map(q => [[T[floor(q) % N], q - floor(q)]].map(af => {x: af[0].x + af[0].ex * af[1] + af[0].nx * r.lane, z: af[0].z + af[0].ez * af[1] + af[0].nz * r.lane, h: af[0].hs + af[0].dh * af[1], c: r.c})[0])[0])
+  let SHOWN = chase ? RP : GRIDP
+  let ME = chase ? {x: px, z: pz, h: ph} : [T[N - 2]].map(a => {x: a.x + a.ex * 0.5 + a.nx * 3, z: a.z + a.ez * 0.5 + a.nz * 3, h: a.hs})[0]
+  // landscape: on the menu the car sits left of the middle, clear of the panel on the right
+  let LANDV = (screenWidth ?? 400) > (screenHeight ?? 800)
+  let cam = chase ? {eye: [px - sin(rad(camH)) * 11.5, 5.2, pz - cos(rad(camH)) * 11.5], look: [px + sin(rad(camH)) * 9, 1.2, pz + cos(rad(camH)) * 9], fov: 56 + spd * 0.2, near: 0.4, far: 1200} : [[0.95 + 0.6 * sin(gt * 0.13), rad(ME.h)]].map(a => {eye: [ME.x + (sin(a[1]) * cos(a[0]) - cos(a[1]) * sin(a[0])) * 12, 2.2, ME.z + (cos(a[1]) * cos(a[0]) + sin(a[1]) * sin(a[0])) * 12], look: [ME.x + (cos(a[1]) * cos(a[0]) + sin(a[1]) * sin(a[0])) * (LANDV ? 6 : 0), 0.3, ME.z - (sin(a[1]) * cos(a[0]) - cos(a[1]) * sin(a[0])) * (LANDV ? 6 : 0)], fov: LANDV ? 42 : 50, near: 0.4, far: 1200})[0]
+
+  let raceT = mode == "race" ? max(0, gt - t0) : (mode == "done" ? finT : 0)
+  let lapNo = clamp(len(laps) + 1, 1, LAPS)
+  let pos = mode == "done" ? place : 1 + count(rivals, r => r.s > prog)
+  let ord = ["1st", "2nd", "3rd", "4th"]
+  let tStr = [raceT].map(t => floor(t / 60) + ":" + pad(fixed(t % 60, 2), 5, "0"))[0]
+  let bestStr = best[E.id] == null ? "no time yet" : [best[E.id]].map(t => floor(t / 60) + ":" + pad(fixed(t % 60, 2), 5, "0"))[0]
+  let bestLapStr = bestLap[E.id] == null ? "" : [bestLap[E.id]].map(t => floor(t / 60) + ":" + pad(fixed(t % 60, 2), 5, "0"))[0]
+  let kmh = round(spd * 4.2)
+
+  // A new race: the player at the back of the grid, the rivals two by two ahead.
+  on go {
+    let a = T[N - 4]
+    mode = "count"
+    t0 = gt + 3.4
+    px = a.x + a.nx * 3
+    pz = a.z + a.nz * 3
+    ph = a.h
+    camH = a.h
+    pvx = 0
+    pvz = 0
+    pd = 3
+    si = N - 4
+    su = 0
+    prog = -4
+    laps = []
+    place = 0
+    finT = 0
+    lapAt = -100
+    newBest = false
+    fx = []
+    gas = false
+    brake = false
+    rivals = [{s: -1.5, lane: -3, v: 0, k: 0.99, c: 1, fin: null}, {s: -1.5, lane: 3, v: 0, k: 0.94, c: 2, fin: null}, {s: -4, lane: -3, v: 0, k: 0.9, c: 3, fin: null}]
+    restX = tilted ? clamp(m.x, -0.35, 0.35) : 0
+  }
+
+  every frame {
+    if !still {
+      gt = gt + dt
+      if mode == "count" && gt >= t0 {
+        mode = "race"
+      }
+      if mode == "race" || mode == "done" {
+        let racing = mode == "race"
+        // Steering: the tilt, from where the phone was held at the start; or the arrow buttons.
+        let st = !racing ? 0 : (tilted ? clamp((m.x - restX) * 2.5, -1, 1) : (left ? -1 : 0) + (right ? 1 : 0))
+        let sd = abs(st) < 0.05 ? 0 : st
+        let fx0 = sin(rad(ph))
+        let fz0 = cos(rad(ph))
+        let fwd = pvx * fx0 + pvz * fz0
+        let lat = pvz * fx0 - pvx * fz0
+        let off = abs(pd) > HW + 1.3
+        let top = PTOP * (off ? E.offTop + OFFK : 1)
+        let f1 = racing && brake ? (fwd > 0.5 ? fwd - 40 * dt : max(-10, fwd - 14 * dt)) : (racing && gas ? (fwd < top ? fwd + PACC * (1 - 0.65 * max(0, fwd) / top) * dt : max(top, fwd - 30 * dt)) : (fwd > top ? max(top, fwd - 30 * dt) : fwd * pow(off ? 0.4 : 0.65, dt)))
+        let l1 = lat * pow((off ? E.gripOff : E.grip) * GRIPK, dt)
+        let nh = ph - sd * 100 * TURNK * clamp(fwd / 8, -1, 1) * (1 - 0.35 * clamp(fwd / PTOP, 0, 1)) * dt
+        let vx1 = fx0 * f1 - fz0 * l1
+        let vz1 = fz0 * f1 + fx0 * l1
+        let ax = px + vx1 * dt
+        let az = pz + vz1 * dt
+        // Which segment it's on now: the nearest of the few round the last one.
+        let cand = range(-2, 5).map(k => T[(si + k + N) % N]).map(a => [clamp(((ax - a.x) * a.ex + (az - a.z) * a.ez) / a.l2, 0, 1)].map(u => {j: a.i, u: u, qx: a.x + a.ex * u, qz: a.z + a.ez * u, nx: a.nx, nz: a.nz, d2: pow(ax - a.x - a.ex * u, 2) + pow(az - a.z - a.ez * u, 2)})[0])
+        let b = cand.sortBy(c => c.d2)[0]
+        let sg = (ax - b.qx) * b.nx + (az - b.qz) * b.nz < 0 ? -1 : 1
+        // how far from the nearest point of the middle line, on the right (+) or left (-)
+        let dl = max(0.001, sqrt(b.d2))
+        let d = sg * dl
+        // The fences: pushed back inside, toward that nearest point, and the part of the speed into them taken off, with a little bounce.
+        let wall = dl > LIM
+        let ux = (ax - b.qx) / dl
+        let uz = (az - b.qz) / dl
+        let vn = vx1 * ux + vz1 * uz
+        let into = wall && vn > 0
+        let bx = wall ? b.qx + ux * LIM : ax
+        let bz = wall ? b.qz + uz * LIM : az
+        let vx2 = (into ? vx1 - ux * vn * 1.3 : vx1) * (wall ? pow(0.4, dt) : 1)
+        let vz2 = (into ? vz1 - uz * vn * 1.3 : vz1) * (wall ? pow(0.4, dt) : 1)
+        // Bumping a rival, softly: each car is two circles 2.3 across, front and rear. Where yours overlaps one, the two
+        // are pushed apart a third of the overlap each, every frame (a stiff spring, so they never pass through), and of
+        // the speed toward each other they share what's lost, with a little bounce.
+        let pfx = sin(rad(nh))
+        let pfz = cos(rad(nh))
+        let CT = RP.map(q => [[sin(rad(q.h)), cos(rad(q.h))]].map(qf => [[-1.1, -1.1], [-1.1, 1.1], [1.1, -1.1], [1.1, 1.1]].map(ab => [[bx + pfx * ab[0] - q.x - qf[0] * ab[1], bz + pfz * ab[0] - q.z - qf[1] * ab[1]]].map(d => [d[0], d[1], max(0.001, sqrt(d[0] * d[0] + d[1] * d[1]))])[0]).sortBy(d => d[2])[0])[0])
+        let CJ = CT.map((d, i) => d[2] >= 2.3 ? null : [[d[0] / d[2], d[1] / d[2], RP[i]]].map(c => [(vx2 - c[2].tx * c[2].v - c[2].nx * c[2].bv) * c[0] + (vz2 - c[2].tz * c[2].v - c[2].nz * c[2].bv) * c[1]].map(vr => {nx: c[0], nz: c[1], m: (2.3 - d[2]) * 0.35, j: vr < 0 ? -0.65 * vr : 0})[0])[0])
+        let knock = max([0] + CJ.map(c => c == null ? 0 : c.j))
+        px = bx + sum(CJ.map(c => c == null ? 0 : c.nx * c.m))
+        pz = bz + sum(CJ.map(c => c == null ? 0 : c.nz * c.m))
+        pvx = vx2 + sum(CJ.map(c => c == null ? 0 : c.nx * c.j))
+        pvz = vz2 + sum(CJ.map(c => c == null ? 0 : c.nz * c.j))
+        ph = nh
+        pd = wall ? sg * LIM : d
+        let dp = (b.j + b.u) - (si + su)
+        let np = prog + (dp > N / 2 ? dp - N : (dp < -N / 2 ? dp + N : dp))
+        si = b.j
+        su = b.u
+        prog = np
+        // A lap: the line crossed for a lap not yet timed.
+        if racing && floor(np / N) > len(laps) {
+          let lt = gt - t0 - sum(laps)
+          laps = laps + [lt]
+          lapAt = gt
+          if bestLap[E.id] == null || lt < bestLap[E.id] {
+            bestLap = set(bestLap, E.id, lt)
+          }
+          if len(laps) >= LAPS {
+            let pl = 1 + count(rivals, r => r.s >= LAPS * N)
+            let nb = best[E.id] == null || gt - t0 < best[E.id]
+            mode = "done"
+            finT = gt - t0
+            place = pl
+            newBest = nb
+            earned = PRIZE[pl - 1] + (nb ? 100 : 0)
+            coins = coins + PRIZE[pl - 1] + (nb ? 100 : 0)
+            if best[E.id] == null || gt - t0 < best[E.id] {
+              best = set(best, E.id, gt - t0)
+            }
+          }
+        }
+        // Smoke and dust off the rear wheels: a light trail that grows with speed, more in a slide, a wheelspin, hard
+        // braking or off the road; sparks from 60% of top speed on, more toward it, and a burst against a fence or a rival. At most 40 at a time.
+        let fspd = abs(f1)
+        let smokeRate = fspd / PTOP * 8 + (abs(l1) > 2 ? abs(l1) * 5 : 0) + (racing && gas && f1 < 14 && f1 > 0.5 ? 12 : 0) + (racing && brake && f1 > 8 ? 22 : 0) + (off && fspd > 3 ? fspd * 0.7 : 0)
+        let sparkRate = (wall && fspd > 4 ? 90 : 0) + (knock > 1.5 ? 70 : 0) + (any(CJ, c => c != null) ? 8 : 0) + (f1 > PTOP * 0.6 ? (f1 / PTOP - 0.6) * 80 : 0)
+        let ns = floor(smokeRate * dt + random())
+        let np2 = floor(sparkRate * dt + random())
+        let born = range(ns + np2).map(i => [[i < ns ? "s" : "p", random() < 0.5 ? 1.05 : -1.05, random()]].map(q => {
+          x: px + q[1] * cos(rad(ph)) - 1.5 * sin(rad(ph)), y: 0.25, z: pz - q[1] * sin(rad(ph)) - 1.5 * cos(rad(ph)),
+          vx: pvx * 0.35 + (random() - 0.5) * (q[0] == "s" ? 2 : 7), vy: q[0] == "s" ? 0.8 + random() * 1.2 : 2 + random() * 4, vz: pvz * 0.35 + (random() - 0.5) * (q[0] == "s" ? 2 : 7),
+          t: 0, l: q[0] == "s" ? 0.7 + q[2] * 0.5 : 0.3 + q[2] * 0.3, k: q[0]})[0])
+        fx = take(born + fx.filter(p => p.t + dt < p.l).map(p => merge(p, {x: p.x + p.vx * dt, y: max(0.05, p.y + p.vy * dt), z: p.z + p.vz * dt, vx: p.vx * pow(p.k == "s" ? 0.3 : 0.7, dt), vy: p.k == "s" ? p.vy * pow(0.5, dt) : p.vy - 14 * dt, vz: p.vz * pow(p.k == "s" ? 0.3 : 0.7, dt), t: p.t + dt})), 40)
+        // The rivals: each aims for the speed of the bends ahead, a little more when far behind you, a little less
+        // when far ahead, and gets there at its own pace.
+        // What a bump does to each rival (its share, along the track and across it), and rivals side by side nudge each
+        // other apart, the one behind easing off to the speed of the one ahead instead of driving through it.
+        let RR = range(len(RP)).map(i => range(len(RP)).filter(j => j != i).map(j => [[(RP[i].s - RP[j].s) * RP[i].len, RP[i].le - RP[j].le]].map(d => abs(d[0]) < 4.2 && abs(d[1]) < 2.4 ? {p: (d[1] == 0 ? (i < j ? 1 : -1) : sign(d[1])) * (2.4 - abs(d[1])) * 0.3, cap: d[0] < 0 ? RP[j].v : 999} : {p: 0, cap: 999})[0]))
+        let RIN = range(len(RP)).map(i => [CJ[i]].map(c => {a: c == null ? 0 : c.nx * RP[i].tx + c.nz * RP[i].tz, sd: c == null ? 0 : c.nx * RP[i].nx + c.nz * RP[i].nz, m: c == null ? 0 : c.m, j: c == null ? 0 : c.j, pr: sum(RR[i].map(x => x.p)), cap: min(RR[i].map(x => x.cap) + [999])})[0])
+        rivals = rivals.map((r, i) => [[T[floor(((r.s % N) + N) % N) % N], RIN[i]]].map(z => [min(z[1].cap, SPDA[z[0].i] * r.k * RIVK * (r.s > prog + 5 ? 0.93 : (r.s < prog - 6 ? 1.07 : 1)))].map(tg => [max(0, (r.v < tg ? min(tg, r.v + 13 * dt) : max(tg, r.v - 24 * dt)) - z[1].j * z[1].a)].map(v => merge(r, {
+          v: v,
+          s: r.s + (v * dt - z[1].a * z[1].m) / z[0].len,
+          b: clamp((r.b ?? 0) + (r.bv ?? 0) * dt - z[1].sd * z[1].m + z[1].pr, -4, 4),
+          bv: (r.bv ?? 0) - z[1].j * z[1].sd + (-9 * (r.b ?? 0) - 5 * (r.bv ?? 0)) * dt
+        }))[0])[0])[0])
+      }
+      // The camera swings round behind the car.
+      camH = camH + (((ph - camH + 540) % 360) - 180) * (1 - pow(0.015, dt))
+    }
+  }
+
+  // The screens' parts, shared by the portrait layout and the landscape one (the 3D view on one side, a panel on the other).
+  let LAND = LANDV
+  let PADL = 16
+  let PADT = max(screenTop ?? 0, 10)
+
+  component Title(size = 34) {
+    Column {
+      gap: 0
+      fill: width
+      Text { text: "VOXEL RALLY"; fill: width; font: PIX; fontSize: size; color: white; align: center; padding: [0, size / 3]; background: #e8412f }
+      Spacer { fill: width; height: 6; background: #a82a1e }
+    }
+  }
+
+  component CoinBadge(label = " COINS", bg = alpha(INK, 0.82)) {
+    Row {
+      gap: 8
+      align: center
+      padding: [12, 8]
+      background: bg
+      Spacer { size: 14; background: GOLD }
+      Text { text: fmtNum(coins) + label; font: PIX; fontSize: 14; color: GOLD }
+    }
+  }
+
+  component TrackGrid(compact = false) {
+    Grid {
+      columns: 2
+      gap: compact ? 8 : 10
+      for e, i in ENVS {
+        Column {
+          gap: 0
+          onTap: env = i
+          Column {
+            fill: width
+            gap: 3
+            padding: compact ? [10, 7] : [12, 10]
+            background: i == env ? GOLD : alpha(INK, 0.82)
+            Text { text: upper(e.name); font: PIX; fontSize: compact ? 12 : 14; color: i == env ? INK : white }
+            Text { text: upper(e.sub); font: PIX; fontSize: 9; color: i == env ? alpha(INK, 0.75) : alpha(white, 0.7) }
+            Text { text: best[e.id] == null ? "-" : "BEST " + floor(best[e.id] / 60) + ":" + pad(fixed(best[e.id] % 60, 2), 5, "0"); font: PIX; fontSize: 10; color: i == env ? #1d6a2e : #9fe6a8 }
+          }
+          Spacer { fill: width; height: 5; background: i == env ? #a8841a : alpha(black, 0.6) }
+        }
+      }
+    }
+  }
+
+  component Hint() {
+    Text { text: tilted ? "TILT TO STEER - HOLD GAS AND BRAKE - 3 LAPS, 3 RIVALS" : "NO TILT ON THIS PHONE: STEER WITH THE ARROWS - 3 LAPS, 3 RIVALS"; font: PIX; fontSize: 10; color: white; align: center; fill: width; padding: [10, 8]; background: alpha(INK, 0.7) }
+  }
+
+  component MenuButtons() {
+    Row {
+      gap: 10
+      fill: width
+      Column {
+        gap: 0
+        weight: 2
+        onTap: go = go + 1
+        Text { text: "RACE"; fill: width; align: center; padding: [0, 14]; font: PIX; fontSize: 26; color: white; background: #e8412f }
+        Spacer { fill: width; height: 6; background: #a82a1e }
+      }
+      Column {
+        gap: 0
+        weight: 1
+        onTap: mode = "garage"
+        Text { text: "GARAGE"; fill: width; align: center; padding: [0, 19]; font: PIX; fontSize: 16; color: INK; background: GOLD }
+        Spacer { fill: width; height: 6; background: #a8841a }
+      }
+    }
+  }
+
+  component GarageHeader() {
+    Row {
+      fill: width
+      justify: spaceBetween
+      align: center
+      Text { text: "GARAGE"; font: PIX; fontSize: 26; color: white }
+      CoinBadge { label: ""; bg: #24262d }
+    }
+  }
+
+  // The car on its turntable, filling whatever room it's given.
+  component Turntable() {
+    Canvas {
+      fill: true
+      clip: true
+      rect(0, 0, width, height, fill: linear(0, 0, 0, height, [#2b2f3a, #17181c]))
+      scene(GCAM, light: [0.5, 1, 0.7], ambient: 0.6) {
+        model(FLOOR, at: [0, 0, 0], scale: 2.6)
+      }
+      scene(GCAM, light: [0.5, 1, 0.7], ambient: 0.6) {
+        model(PLATE, at: [0, 0, 0], scale: [8.6, 0.3, 8.6], color: #3a3e48, smooth: false)
+      }
+      scene(GCAM, light: [0.5, 1, 0.7], ambient: 0.55) {
+        model(CARS[0], at: [0, 0.3, 0], turn: [0, gt * 28, 0])
+      }
+      text("TOP " + round(PTOP * 4.2) + " KM/H", 16, height - 22, size: 11, font: PIX, color: alpha(white, 0.75))
+    }
+  }
+
+  component GarageTabs() {
+    Row {
+      fill: width
+      gap: 10
+      for t in [["tune", "TUNE"], ["style", "STYLE"]] {
+        Column {
+          gap: 0
+          weight: 1
+          onTap: tab = t[0]
+          Text { text: t[1]; fill: width; align: center; padding: [0, 10]; font: PIX; fontSize: 15; color: tab == t[0] ? INK : white; background: tab == t[0] ? GOLD : #2c2f37 }
+          Spacer { fill: width; height: 5; background: tab == t[0] ? #a8841a : #1f2127 }
+        }
+      }
+    }
+  }
+
+  // The tuning or the look, scrolling in the room it's given.
+  component GarageList() {
+    Column {
+      fill: true
+      scroll: true
+      gap: 10
+      if tab == "tune" {
+        for u in UPG {
+          let l = lv[u.id] ?? 0
+          Row {
+            fill: width
+            gap: 12
+            align: center
+            padding: [12, 10]
+            background: #24262d
+            Column {
+              weight: 1
+              gap: 5
+              Text { text: u.n; font: PIX; fontSize: 14; color: white }
+              Text { text: u.id == "eng" ? "TOP SPEED " + round(PTOP * 4.2) + " KM/H" : (u.id == "turbo" ? "PICK-UP +" + round(l * 15) + "%" : "GRIP AND STEERING +" + round(l * 20) + "%"); font: PIX; fontSize: 9; color: alpha(white, 0.65) }
+              Row {
+                gap: 4
+                for k in range(5) {
+                  Spacer { width: 24; height: 10; background: k < l ? GOLD : #3a3d45 }
+                }
+              }
+            }
+            Column {
+              gap: 0
+              width: 96
+              onTap: {
+                if l < 5 && coins >= COST[l] {
+                  coins = coins - COST[l]
+                  lv = set(lv, u.id, l + 1)
+                } else {
+                  if l < 5 {
+                    msg = "NEED " + (COST[l] - coins) + " MORE COINS"
+                    msgAt = gt
+                  }
+                }
+              }
+              Row {
+                fill: width
+                gap: 6
+                align: center
+                justify: center
+                padding: [0, 10]
+                background: l >= 5 ? #3a3d45 : (coins >= COST[l] ? #2fae4a : #4a4d55)
+                if l < 5 {
+                  Spacer { size: 10; background: GOLD }
+                }
+                Text { text: l >= 5 ? "MAX" : str(COST[l]); font: PIX; fontSize: 13; color: white }
+              }
+              Spacer { fill: width; height: 5; background: l >= 5 ? #2a2c32 : (coins >= COST[l] ? #1d7a31 : #33363d) }
+            }
+          }
+        }
+      }
+      if tab == "style" {
+        for g in STYLE {
+          Column {
+            fill: width
+            gap: 8
+            padding: [12, 10]
+            background: #24262d
+            Text { text: g.n + "  " + g.opts[look[g.k] ?? 0].n; font: PIX; fontSize: 13; color: white }
+            Flow {
+              gap: 8
+              for o, i in g.opts {
+                let have = o.p == 0 || any(owned, x => x == g.k + i)
+                let on = (look[g.k] ?? 0) == i
+                Column {
+                  gap: 0
+                  onTap: {
+                    if have {
+                      look = set(look, g.k, i)
+                    } else {
+                      if coins >= o.p {
+                        coins = coins - o.p
+                        owned = owned + [g.k + i]
+                        look = set(look, g.k, i)
+                      } else {
+                        msg = "NEED " + (o.p - coins) + " MORE COINS"
+                        msgAt = gt
+                      }
+                    }
+                  }
+                  if g.k == "paint" || g.k == "rim" {
+                    Column {
+                      gap: 0
+                      padding: 3
+                      background: on ? white : #17181c
+                      Spacer { size: 40; background: o.c }
+                    }
+                    Text { text: have ? (on ? "ON" : "") : str(o.p); width: 46; align: center; padding: [0, 3]; font: PIX; fontSize: 9; color: have ? white : GOLD }
+                  } else {
+                    Text { text: have ? o.n : o.n + " " + o.p; padding: [10, 9]; font: PIX; fontSize: 11; color: on ? INK : (have ? white : GOLD); background: on ? white : #33363d }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component GarageButtons() {
+    Column {
+      fill: width
+      gap: 6
+      if gt - msgAt < 1.8 {
+        Text { text: msg; fill: width; align: center; padding: [0, 8]; font: PIX; fontSize: 12; color: white; background: #d8242a }
+      }
+      Row {
+        fill: width
+        gap: 10
+        Column {
+          gap: 0
+          weight: 1
+          onTap: mode = "menu"
+          Text { text: "BACK"; fill: width; align: center; padding: [0, 14]; font: PIX; fontSize: 16; color: white; background: #3a3d45 }
+          Spacer { fill: width; height: 6; background: #26282e }
+        }
+        Column {
+          gap: 0
+          weight: 2
+          onTap: go = go + 1
+          Text { text: "RACE " + upper(E.name); fill: width; align: center; padding: [0, 14]; font: PIX; fontSize: 16; color: white; background: #e8412f }
+          Spacer { fill: width; height: 6; background: #a82a1e }
+        }
+      }
+    }
+  }
+
+  Box {
+    fill: true
+    background: HAZE
+    if mode != "garage" {
+    Canvas {
+      fill: true
+      // The sky, from deep overhead to the haze at the horizon (found by projecting a point far out at eye height),
+      // and a square sun low in it, glowing, behind everything.
+      let EY = cam.eye
+      let DX = cam.look[0] - EY[0]
+      let DZ = cam.look[2] - EY[2]
+      let DL = max(0.001, sqrt(DX * DX + DZ * DZ))
+      let HY = clamp((project([EY[0] + DX / DL * 30000, EY[1], EY[2] + DZ / DL * 30000], cam, width, height) ?? {y: height * 0.4}).y, 1, height)
+      rect(0, 0, width, HY, fill: linear(0, 0, 0, HY, [E.top, E.sky, HAZE]))
+      rect(0, HY - 1, width, height - HY + 1, fill: HAZE)
+      let SP = project([EY[0] + E.sunDir[0] * 30000, EY[1] + E.sunDir[1] * 30000, EY[2] + E.sunDir[2] * 30000], cam, width, height)
+      if SP != null {
+        rect(SP.x - 120, SP.y - 120, 240, 240, fill: alpha(E.sun, 0.1))
+        rect(SP.x - 78, SP.y - 78, 156, 156, fill: alpha(E.sun, 0.18))
+        rect(SP.x - 48, SP.y - 48, 96, 96, fill: alpha(E.sun, 0.35))
+        rect(SP.x - 32, SP.y - 32, 64, 64, fill: E.sun)
+      }
+      scene(cam, ambient: 1, fog: HAZE) {
+        model(TILE, at: [chase ? px : 0, -0.3, chase ? pz : 0], scale: 2400, color: E.far)
+      }
+      scene(cam, light: LIGHT, ambient: 0.7, fog: HAZE) {
+        for b in FARM {
+          model(b, at: [0, 0, 0])
+        }
+      }
+      scene(cam, light: LIGHT, ambient: 0.62, fog: HAZE) {
+        for b in BACK {
+          model(b, at: [0, 0, 0])
+        }
+        model(CLOUDM, at: [0, 0, 0], ambient: 0.92)
+      }
+      scene(cam, light: LIGHT, ambient: 0.8, fog: HAZE) {
+        model(GROUND, at: [0, 0, 0], scale: 46)
+      }
+      scene(cam, light: LIGHT, ambient: 0.8, fog: HAZE) {
+        model(ROAD, at: [0, 0, 0])
+        model(CURBS, at: [0, 0, 0])
+        if E.dash {
+          model(DASH, at: [0, 0, 0])
+        }
+        model(START, at: [0, 0, 0])
+        for q in SHOWN {
+          model(TILE, at: [q.x, 0.07, q.z], turn: [0, q.h, 0], scale: [2.4, 1, 4.4], color: alpha(black, 0.3), ambient: 1)
+        }
+        model(TILE, at: [ME.x, 0.07, ME.z], turn: [0, ME.h, 0], scale: [2.4, 1, 4.4], color: alpha(black, 0.3), ambient: 1)
+      }
+      scene(cam, light: LIGHT, ambient: 0.62, fog: HAZE) {
+        model(FENCE[0], at: [0, 0, 0], twoSided: true)
+        model(FENCE[1], at: [0, 0, 0], twoSided: true)
+        for s in SECT {
+          model(s, at: [0, 0, 0])
+        }
+        model(GATE, at: [T[0].x, 0, T[0].z], turn: [0, T[0].h, 0])
+        for q in SHOWN {
+          model(CARS[q.c], at: [q.x, 0, q.z], turn: [0, q.h, 0])
+        }
+        model(CARS[0], at: [ME.x, chase ? sin(gt * 47) * 0.02 * min(1, spd / PTOP) : 0, ME.z], turn: [0, ME.h, 0])
+      }
+      // The smoke and sparks, drawn over the scene as squares where they show, smaller further off: smoke puffs grow
+      // and fade, sparks are small and bright.
+      if chase {
+        let FOC = height / 2 / tan(rad(cam.fov / 2))
+        for p in fx {
+          let q = project([p.x, p.y, p.z], cam, width, height)
+          if q != null {
+            let a = p.t / p.l
+            let sz = (p.k == "s" ? 0.3 + a * 0.75 : 0.12) * FOC / q.depth
+            rect(q.x - sz / 2, q.y - sz / 2, sz, sz, fill: p.k == "s" ? alpha(E.dust, 0.42 * (1 - a)) : (a < 0.4 ? #fff3b0 : #ff9a2a))
+          }
+        }
+      }
+    }
+    }
+    // The race's numbers, and the little map, on square dark blocks in the pixel font.
+    if chase {
+      Canvas {
+        fill: true
+        let TOPY = max(screenTop ?? 0, 10) + 8
+        let MS = 112
+        let MX = width - MS - 14
+        rect(12, TOPY, 140, 86, fill: alpha(INK, 0.8))
+        rect(12, TOPY + 86, 140, 5, fill: alpha(black, 0.55))
+        text(ord[pos - 1], 24, TOPY + 25, size: 26, font: PIX, color: pos == 1 ? GOLD : white)
+        text("/4", 94, TOPY + 29, size: 13, font: PIX, color: alpha(white, 0.7))
+        text("LAP " + lapNo + "/" + LAPS, 24, TOPY + 54, size: 13, font: PIX, color: white)
+        text(tStr, 24, TOPY + 73, size: 13, font: PIX, color: alpha(white, 0.8))
+        rect(MX - 8, TOPY, MS * MAPW + 16, MS * MAPH + 16, fill: alpha(INK, 0.8))
+        rect(MX - 8, TOPY + MS * MAPH + 16, MS * MAPW + 16, 5, fill: alpha(black, 0.55))
+        path(TN.map(p => [MX + p[0] * MS, TOPY + 8 + p[1] * MS]), closed: true, stroke: alpha(white, 0.85), width: 3)
+        for q in RP {
+          rect(MX + (q.x - MINX) / SPAN * MS - 4, TOPY + 4 + (q.z - MINZ) / SPAN * MS, 8, 8, fill: CARC[q.c])
+        }
+        rect(MX + (px - MINX) / SPAN * MS - 6, TOPY + 2 + (pz - MINZ) / SPAN * MS, 12, 12, fill: white)
+        rect(MX + (px - MINX) / SPAN * MS - 4, TOPY + 4 + (pz - MINZ) / SPAN * MS, 8, 8, fill: PAINT.c)
+        if mode != "done" {
+          // portrait: between the pedals; landscape: at the top, clear of the car, on a block of its own (the sun can be behind it)
+          if LAND {
+            rect(width / 2 - 62, TOPY, 124, 74, fill: alpha(INK, 0.8))
+            rect(width / 2 - 62, TOPY + 74, 124, 5, fill: alpha(black, 0.55))
+          }
+          text(str(kmh), width / 2, LAND ? TOPY + 26 : height - 80, size: 36, font: PIX, align: center, color: white)
+          text("KM/H", width / 2, LAND ? TOPY + 56 : height - 50, size: 12, font: PIX, align: center, color: alpha(white, 0.8))
+        }
+        if mode == "count" {
+          let left3 = ceil(t0 - gt)
+          text(left3 > 3 ? "" : str(left3), width / 2, height * 0.36, size: 80, font: PIX, align: center, color: left3 == 1 ? GOLD : white)
+        }
+        if mode == "race" && gt - t0 < 0.9 {
+          text("GO!", width / 2, height * 0.36, size: 80, font: PIX, align: center, color: #5cdc5a)
+        }
+        if mode == "race" && gt - lapAt < 1.8 && len(laps) > 0 {
+          text(len(laps) == LAPS - 1 ? "FINAL LAP" : "LAP " + (len(laps) + 1), width / 2, height * 0.3, size: 30, font: PIX, align: center, color: white)
+          text([laps[len(laps) - 1]].map(t => floor(t / 60) + ":" + pad(fixed(t % 60, 2), 5, "0"))[0], width / 2, height * 0.3 + 34, size: 16, font: PIX, align: center, color: alpha(white, 0.9))
+        }
+      }
+    }
+    // Gas and brake under the thumbs (and arrows to steer on a phone that can't tilt), and a way out. Each is a block
+    // on a darker ledge; pressed, it sinks onto it.
+    if mode == "count" || mode == "race" {
+      Column {
+        fill: true
+        padding: [16, 24]
+        justify: end
+        Row {
+          fill: width
+          justify: spaceBetween
+          align: bottom
+          Row {
+            gap: 12
+            align: bottom
+            Column {
+              gap: 0
+              onPress: brake = true
+              onRelease: brake = false
+              Spacer { height: brake ? 6 : 0 }
+              Text { text: "BRAKE"; width: 104; height: 88; align: center; padding: [0, 32]; font: PIX; fontSize: 16; color: white; background: brake ? #d8242a : alpha(INK, 0.82) }
+              Spacer { width: 104; height: brake ? 0 : 6; background: brake ? transparent : alpha(black, 0.6) }
+            }
+            if !tilted {
+              Column {
+                gap: 0
+                onPress: left = true
+                onRelease: left = false
+                Spacer { height: left ? 6 : 0 }
+                Text { text: "<"; width: 70; height: 70; align: center; padding: [0, 20]; font: PIX; fontSize: 24; color: white; background: left ? #5a5f6a : alpha(INK, 0.82) }
+                Spacer { width: 70; height: left ? 0 : 6; background: alpha(black, 0.6) }
+              }
+            }
+          }
+          Row {
+            gap: 12
+            align: bottom
+            if !tilted {
+              Column {
+                gap: 0
+                onPress: right = true
+                onRelease: right = false
+                Spacer { height: right ? 6 : 0 }
+                Text { text: ">"; width: 70; height: 70; align: center; padding: [0, 20]; font: PIX; fontSize: 24; color: white; background: right ? #5a5f6a : alpha(INK, 0.82) }
+                Spacer { width: 70; height: right ? 0 : 6; background: alpha(black, 0.6) }
+              }
+            }
+            Column {
+              gap: 0
+              onPress: gas = true
+              onRelease: gas = false
+              Spacer { height: gas ? 6 : 0 }
+              Text { text: "GAS"; width: 120; height: 104; align: center; padding: [0, 38]; font: PIX; fontSize: 22; color: white; background: gas ? #2fae4a : alpha(INK, 0.82) }
+              Spacer { width: 120; height: gas ? 0 : 6; background: gas ? transparent : alpha(black, 0.6) }
+            }
+          }
+        }
+      }
+      Column {
+        fill: true
+        padding: [0, max(screenTop ?? 0, 10) + 146, 14, 0]
+        align: end
+        Text { text: "X"; width: 44; height: 44; align: center; padding: [0, 12]; font: PIX; fontSize: 16; color: white; background: alpha(INK, 0.8); onTap: { mode = "menu"; gas = false; brake = false } }
+      }
+    }
+    // The finish: your place, your time, your laps.
+    if mode == "done" {
+      Column {
+        fill: true
+        justify: center
+        align: center
+        padding: 24
+        Column {
+          gap: 0
+          Column {
+            width: 320
+            gap: 6
+            align: center
+            padding: [20, 22]
+            background: alpha(INK, 0.88)
+            Text { text: place == 1 ? "YOU WIN!" : "FINISHED " + upper(ord[place - 1]); font: PIX; fontSize: 26; color: place == 1 ? GOLD : white; align: center }
+            Text { text: upper(E.name); font: PIX; fontSize: 12; color: alpha(white, 0.7); align: center }
+            Text { text: tStr; font: PIX; fontSize: 32; color: white; align: center }
+            Text { text: newBest ? "NEW BEST TIME!" : "BEST " + bestStr; font: PIX; fontSize: 12; color: newBest ? #5cdc5a : alpha(white, 0.7); align: center }
+            Row {
+              gap: 8
+              align: center
+              Spacer { size: 14; background: GOLD }
+              Text { text: "+" + earned + " COINS"; font: PIX; fontSize: 16; color: GOLD }
+            }
+            for t, i in laps {
+              Text { text: "LAP " + (i + 1) + "  " + floor(t / 60) + ":" + pad(fixed(t % 60, 2), 5, "0"); font: PIX; fontSize: 13; color: alpha(white, 0.85); align: center }
+            }
+            Spacer { size: 10 }
+            Row {
+              gap: 8
+              Column {
+                gap: 0
+                onTap: go = go + 1
+                Text { text: "AGAIN"; padding: [10, 12]; font: PIX; fontSize: 12; color: white; background: #2fae4a }
+                Spacer { height: 5; background: #1d7a31 }
+              }
+              Column {
+                gap: 0
+                onTap: mode = "garage"
+                Text { text: "GARAGE"; padding: [10, 12]; font: PIX; fontSize: 12; color: INK; background: GOLD }
+                Spacer { height: 5; background: #a8841a }
+              }
+              Column {
+                gap: 0
+                onTap: mode = "menu"
+                Text { text: "TRACKS"; padding: [10, 12]; font: PIX; fontSize: 12; color: white; background: #5a5f6a }
+                Spacer { height: 5; background: #33363d }
+              }
+            }
+          }
+          Spacer { width: 320; height: 6; background: alpha(black, 0.6) }
+        }
+      }
+    }
+    // The menu: your car on the grid behind it. Portrait: the title at the top, the tracks and buttons at the bottom;
+    // landscape: the title on the left over the car, the tracks and buttons in a panel on the right.
+    if mode == "menu" {
+      if LAND {
+        Row {
+          fill: true
+          gap: 20
+          align: top
+          padding: [PADL, PADT + 6, 16, 14]
+          Column {
+            weight: 1
+            gap: 10
+            align: start
+            Title { size: 26 }
+            CoinBadge {}
+          }
+          Column {
+            width: 400
+            fill: height
+            gap: 8
+            justify: end
+            TrackGrid { compact: true }
+            Hint {}
+            MenuButtons {}
+          }
+        }
+      } else {
+        Column {
+          fill: true
+          padding: [20, PADT + 16, 20, 26]
+          justify: spaceBetween
+          Column {
+            gap: 10
+            align: center
+            fill: width
+            Title {}
+            CoinBadge {}
+          }
+          Column {
+            fill: width
+            gap: 10
+            TrackGrid {}
+            Hint {}
+            MenuButtons {}
+          }
+        }
+      }
+    }
+    // The garage: the car on a turntable, its tuning and its look, bought with coins. Landscape: the turntable on the
+    // left, the tabs, list and buttons in a panel on the right.
+    if mode == "garage" {
+      if LAND {
+        Row {
+          fill: true
+          gap: 0
+          background: #17181c
+          Column {
+            weight: 1
+            fill: height
+            gap: 0
+            GarageHeader { padding: [PADL, PADT + 4, 16, 4] }
+            Turntable { weight: 1; fill: width }
+          }
+          Column {
+            width: 420
+            fill: height
+            gap: 10
+            padding: [8, PADT + 8, 16, 12]
+            GarageTabs {}
+            GarageList { weight: 1; fill: width }
+            GarageButtons {}
+          }
+        }
+      } else {
+        Column {
+          fill: true
+          gap: 0
+          background: #17181c
+          GarageHeader { padding: [16, PADT + 12, 16, 8] }
+          Turntable { height: 250; fill: width }
+          GarageTabs { padding: [16, 10] }
+          GarageList { weight: 1; fill: width; padding: [16, 2, 16, 10] }
+          GarageButtons { padding: [16, 6, 16, 22] }
+        }
+      }
+    }
+  }
+}

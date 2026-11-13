@@ -1,0 +1,12 @@
+# The store's screens (scripts/store-previews.sh): every frame doesn't run while they're drawn, so still holds each one.
+# The race's places are worked out from the circuit's track: the player 1.5 right of the middle at point 40, at 40 a second.
+# The store's preview: your car on pole on the circuit, the camera low beside it.
+still = true; mode = "menu"; env = 0; gt = 2
+# A race: third, a rival either side ahead, GAS held.
+still = true; env = 0; mode = "race"; gt = 50; t0 = 12; laps = []; px = -77.174; pz = 98.625; ph = -118.755; camH = -118.755; pvx = -35.067; pvz = -19.243; pd = 1.5; si = 40; su = 0; prog = 40; gas = true; brake = false; fx = []; rivals = [{"s":42.6,"lane":-3,"v":40,"k":0.99,"c":1,"fin":null},{"s":46,"lane":2,"v":40,"k":0.94,"c":2,"fin":null},{"s":36,"lane":-2,"v":38,"k":0.9,"c":3,"fin":null}]
+# The garage: a car built in purple with twin stripes, a GT wing and gold rims, its look on show.
+still = true; mode = "garage"; tab = "style"; gt = 1.4; coins = 4200; look = {"paint":3,"stripe":2,"spoiler":3,"rim":3}; owned = ["paint3","stripe2","spoiler3","rim3"]; lv = {"eng":2,"turbo":1,"tires":0}
+# The finish: a win, a new best time, and the coins it pays.
+still = true; env = 0; mode = "done"; gt = 50; px = -77.174; pz = 98.625; ph = -118.755; camH = -118.755; pvx = 0; pvz = 0; place = 1; finT = 91.16; laps = [30.12, 29.8, 31.24]; earned = 500; newBest = true; best = {"circuit":91.16}; coins = 4700; rivals = [{"s":358,"lane":-3,"v":30,"k":0.99,"c":1,"fin":null},{"s":352,"lane":2,"v":30,"k":0.94,"c":2,"fin":null},{"s":349,"lane":-2,"v":30,"k":0.9,"c":3,"fin":null}]
+# The red canyon's grid at sunset.
+still = true; mode = "menu"; env = 2; gt = 2; coins = 4700; best = {"circuit":91.16}
