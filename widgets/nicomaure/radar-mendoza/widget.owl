@@ -1,0 +1,809 @@
+widget "Radar Mendoza" {
+  meta {
+    owl: 18
+    description: "Radar de tormentas y granizo en vivo de la DACC (Mendoza) por zona, sobre mapa con localidades, avisos de tormenta fuerte cerca, animación y viento."
+    version: "5.2"
+    license: "MIT"
+    category: "world"
+  }
+  size: 6x4
+  minSize: 3x3
+  padding: 0
+
+  requires { pacman: ["curl", "jq", "gawk", "imagemagick", "ttf-dejavu", "util-linux"] }
+
+  // minutos entre descargas (la DACC publica un cuadro cada 2 min, ~14 KB cada uno)
+  state intervalMin = 5 persist
+  // zona y capa (dbz = lluvia/reflectividad, granizo = prob. granizo)
+  state zone = "gran" persist
+  state layer = "dbz" persist
+  state view = "live"
+  state playing = false
+  state frame = 9
+  state zoom = 1
+  state panX = 0
+  state panY = 0
+  // dónde está quien lo usa: un departamento, o "gps" (la ubicación aproximada del teléfono)
+  state place = "capital" persist
+  state gpsLat = null persist
+  state gpsLon = null persist
+  state showPlaces = false
+  // aviso de tormenta: radio en km alrededor del lugar
+  state alertsOn = true persist
+  state alertKm = 25 persist
+  state nextCheck = 1 persist
+  state lastNotifSev = 0 persist
+  state lastNotifAt = 0 persist
+  state dismissedAt = 0 persist
+  state dismissedSev = 0 persist
+
+  source now = clock every 30s
+  source here = android.location
+  source alert = file("~/.cache/omalauncher-radar-mendoza/alert/state.json") json
+
+  // Baja los últimos 10 cuadros de reflectividad georreferenciados de la DACC,
+  // recorta la zona elegida y la pone sobre un mapa oscuro con los pueblos.
+  source radar = cmd("""
+set -euo pipefail
+export LC_ALL=C
+B="https://www2.contingencias.mendoza.gov.ar/radar/web"
+C=~/.cache/omalauncher-radar-mendoza
+mkdir -p "$C/raw" "$C/tiles" "$C/out"
+# restos de la versión que bajaba el GIF animado
+rm -rf "$C/frames" "$C/frames.new" "$C/anim.gif" "$C/headers.txt"
+exec 9>"$C/lock"
+if ! flock -n 9; then
+  [ -s "$C/meta.json" ] && cat "$C/meta.json"
+  exit 0
+fi
+INTERVAL=5
+[ -f "$C/interval.min" ] && INTERVAL=$(tr -dc '0-9' < "$C/interval.min")
+case "$INTERVAL" in 2|5|10|20) ;; *) INTERVAL=5 ;; esac
+ZONE=gran
+[ -f "$C/zone" ] && ZONE=$(tr -dc 'a-z' < "$C/zone")
+LAYER=dbz
+[ -f "$C/layer" ] && LAYER=$(tr -dc 'a-z' < "$C/layer")
+[ "$LAYER" = granizo ] || LAYER=dbz
+# al cambiar los nombres del mapa o la geometría, se rehacen las imágenes guardadas
+VER=2
+if [ "$(cat "$C/ver" 2>/dev/null)" != "$VER" ]; then
+  rm -f "$C"/tiles/*_labels.png "$C"/out/*.png "$C/meta.json"
+  echo "$VER" > "$C/ver"
+fi
+# zona: latN latS lonW lonE zoom-del-mapa
+if [ "$ZONE" = norte ]; then
+  Z="-32.55 -33.51 -69.30 -67.70 9"
+elif [ "$ZONE" = uco ]; then
+  Z="-33.30 -34.10 -69.75 -68.40 9"
+elif [ "$ZONE" = sur ]; then
+  Z="-34.20 -35.37 -69.00 -67.00 9"
+elif [ "$ZONE" = provincia ]; then
+  Z="-32.00 -36.10 -70.60 -66.50 8"
+else
+  ZONE=gran; Z="-32.75 -33.20 -69.15 -68.40 10"
+fi
+set -- $Z; LATN=$1; LATS=$2; LONW=$3; LONE=$4; ZM=$5
+
+now=$(date +%s)
+last=0; [ -f "$C/fetched_at" ] && last=$(tr -dc '0-9' < "$C/fetched_at")
+force=0; [ -f "$C/force" ] && force=$(tr -dc '0-9' < "$C/force")
+[ -z "$last" ] && last=0; [ -z "$force" ] && force=0
+if [ -s "$C/meta.json" ] && [ "$(jq -r .zone "$C/meta.json")" = "$ZONE" ] \
+   && [ "$(jq -r .layer "$C/meta.json")" = "$LAYER" ] \
+   && [ $(( now - last )) -lt $(( INTERVAL * 60 )) ] && [ "$force" -le "$last" ]; then
+  cat "$C/meta.json"; exit 0
+fi
+
+# los últimos 10 cuadros de la capa elegida (uno cada 2 min, hora UTC en el nombre)
+code=0
+curl -fsm 30 --compressed -o "$C/file_list.json" "$B/file_list.json?v=$now" || code=$?
+date +%s > "$C/fetched_at"
+if [ "$code" -ne 0 ]; then
+  [ -s "$C/meta.json" ] && { cat "$C/meta.json"; exit 0; }
+  exit 1
+fi
+LIST=$(jq -r --arg layer "$LAYER" 'to_entries | map(.key as $k | .value[] | select(test("^[0-9]{6}_" + $layer + "\\.png$")) | "\($k)_\(.[0:6])") | sort | .[-10:] | .[]' "$C/file_list.json")
+for f in $LIST; do
+  [ -s "$C/raw/${LAYER}_$f.png" ] && continue
+  curl -fsm 20 -o "$C/raw/${LAYER}_$f.png.tmp" "$B/${f%_*}/${f#*_}_${LAYER}.png" && mv -f "$C/raw/${LAYER}_$f.png.tmp" "$C/raw/${LAYER}_$f.png" || rm -f "$C/raw/${LAYER}_$f.png.tmp"
+done
+find "$C/raw" -maxdepth 1 -name '*.png' -mmin +60 -delete
+
+# geometría: el PNG del radar cubre estos límites, estirado en Mercator como en el visor de la DACC
+G=$(awk -v latn="$LATN" -v lats="$LATS" -v lonw="$LONW" -v lone="$LONE" -v z="$ZM" 'function my(l,  r){ r=l*3.14159265358979/180; return log((1+sin(r))/cos(r)) }
+  function px(lon){ return (lon+180)/360*256*2^z }
+  function py(lat){ return (1-my(lat)/3.14159265358979)/2*256*2^z }
+  BEGIN {
+    rlatS=-34-250/110.924+0.046; rlatN=-34+450/110.924+0.046; rlonW=-68-250/92.425; rlonE=-68+250/92.425
+    X0=px(lonw); X1=px(lone); Y0=py(latn); Y1=py(lats)
+    W=int(X1-X0+0.5); H=int(Y1-Y0+0.5)
+    rx0=(lonw-rlonW)/(rlonE-rlonW)*500; rx1=(lone-rlonW)/(rlonE-rlonW)*500
+    ry0=(my(rlatN)-my(latn))/(my(rlatN)-my(rlatS))*700; ry1=(my(rlatN)-my(lats))/(my(rlatN)-my(rlatS))*700
+    printf "%d %d %d %d %d %d %.3f %.3f %.3f %.3f\n", int(X0/256), int(X1/256), int(Y0/256), int(Y1/256), W, H, rx0, ry0, rx1, ry1
+    printf "%d %d\n", int(X0) - int(X0/256)*256, int(Y0) - int(Y0/256)*256
+  }')
+read -r TX0 TX1 TY0 TY1 W H RX0 RY0 RX1 RY1 OX OY <<< "$(echo $G)"
+
+# mapa de fondo (oscuro, de Esri) una sola vez por zona, y encima los nombres de
+# los pueblos: más o menos según la zona, para que no se encimen
+base="$C/tiles/${ZONE}_base.png"; labels="$C/tiles/${ZONE}_labels.png"
+if [ ! -s "$base" ]; then
+  E=https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile
+  rows=()
+  for ty in $(seq "$TY0" "$TY1"); do
+    row=()
+    for tx in $(seq "$TX0" "$TX1"); do
+      t="$C/tiles/Base-$ZM-$ty-$tx"
+      [ -s "$t" ] || curl -fsm 20 -o "$t" "$E/$ZM/$ty/$tx"
+      row+=("$t")
+    done
+    rows+=("(" "${row[@]}" +append ")")
+  done
+  magick "${rows[@]}" -append -crop "${W}x${H}+${OX}+${OY}" +repage "$base.tmp.png" && mv -f "$base.tmp.png" "$base"
+fi
+if [ ! -s "$labels" ]; then
+  RANK=2; [ "$ZONE" = gran ] && RANK=3; [ "$ZONE" = provincia ] && RANK=1
+  PT=15; [ "$ZONE" = gran ] && PT=16
+  args=()
+  while IFS='|' read -r x y name side; do
+    # L: el nombre a la izquierda del punto, para que no se encime con el vecino
+    tx=$((x+7))
+    if [ "$side" = L ]; then
+      tw=$(magick -font DejaVu-Sans -pointsize "$PT" label:"$name" -format %w info:)
+      tx=$((x-7-tw))
+    fi
+    args+=(-stroke none -fill '#f0f0f0' -draw "circle $x,$y $((x+3)),$y")
+    args+=(-stroke '#000000' -strokewidth 4 -annotate "+$tx+$((y+5))" "$name")
+    args+=(-stroke none -fill '#f0f0f0' -annotate "+$tx+$((y+5))" "$name")
+  done < <(awk -F'|' -v latn="$LATN" -v lats="$LATS" -v lonw="$LONW" -v lone="$LONE" -v z="$ZM" -v rank="$RANK" -v w="$W" -v h="$H" '
+    function my(l,  r){ r=l*3.14159265358979/180; return log((1+sin(r))/cos(r)) }
+    function px(lon){ return (lon+180)/360*256*2^z }
+    function py(lat){ return (1-my(lat)/3.14159265358979)/2*256*2^z }
+    $1 <= rank { x=int(px($3)-px(lonw)); y=int(py($2)-py(latn)); ok = ($5 == "L") ? (x - 10 - 9 * length($4) > 0) : (x + 10 + 9 * length($4) < w); if (x > 4 && y > 12 && ok && y < h - 6) print x "|" y "|" $4 "|" $5 }' <<'EOF'
+1|-32.889|-68.845|Mendoza
+1|-33.081|-68.468|San Martín
+1|-33.578|-69.017|Tunuyán
+1|-34.617|-68.330|San Rafael
+1|-34.977|-67.690|Gral. Alvear
+1|-35.475|-69.585|Malargüe
+1|-32.590|-69.347|Uspallata
+2|-33.039|-68.878|Luján de Cuyo
+2|-32.983|-68.783|Maipú
+2|-32.720|-68.590|Lavalle
+2|-33.190|-68.460|Rivadavia
+2|-33.250|-68.150|Santa Rosa
+2|-33.460|-67.550|La Paz
+2|-32.960|-69.200|Potrerillos
+2|-33.370|-69.150|Tupungato
+2|-33.770|-69.050|San Carlos
+2|-35.030|-68.680|El Nihuil
+3|-32.850|-68.820|Las Heras
+3|-32.925|-68.850|Godoy Cruz|L
+3|-32.915|-68.740|Guaymallén
+EOF
+)
+  magick -size "${W}x${H}" xc:none -font DejaVu-Sans -pointsize "$PT" "${args[@]}" "$labels.tmp.png" && mv -f "$labels.tmp.png" "$labels"
+fi
+
+# un cuadro por hora: radar recortado a la zona, en bloques de 1 km, sobre el mapa y bajo los nombres
+FRAMES=(); TIMES=()
+for f in $LIST; do
+  [ -s "$C/raw/${LAYER}_$f.png" ] || continue
+  o="$C/out/${ZONE}_${LAYER}_$f.png"
+  if [ ! -s "$o" ]; then
+    magick "$base" \
+      \( "$C/raw/${LAYER}_$f.png" -alpha set -virtual-pixel transparent -interpolate nearest-neighbor -filter point \
+         -define distort:viewport="${W}x${H}+0+0" \
+         -distort Affine "$RX0,$RY0 0,0  $RX1,$RY0 $W,0  $RX0,$RY1 0,$H" -channel A -evaluate multiply 0.85 +channel \) \
+      -composite "$labels" -composite "$o.tmp.png" && mv -f "$o.tmp.png" "$o"
+  fi
+  FRAMES+=("$o")
+  d=${f%_*}; h=${f#*_}
+  TIMES+=("$(date -u -d "${d:0:4}-${d:4:2}-${d:6:2} ${h:0:2}:${h:2:2}:${h:4:2}" +%s)")
+done
+[ ${#FRAMES[@]} -gt 0 ] || exit 1
+
+jq -n --arg zone "$ZONE" --arg layer "$LAYER" --argjson w "$W" --argjson h "$H" \
+  --argjson latn "$LATN" --argjson lats "$LATS" --argjson lonw "$LONW" --argjson lone "$LONE" \
+  --argjson fetched "$now" \
+  --args '{zone: $zone, layer: $layer, fetched: $fetched, frames: $ARGS.positional[:($ARGS.positional|length/2)], times: ($ARGS.positional[($ARGS.positional|length/2):] | map(tonumber)), geo: {w: $w, h: $h, latn: $latn, lats: $lats, lonw: $lonw, lone: $lone}} | .latest = .times[-1]' \
+  "${FRAMES[@]}" "${TIMES[@]}" > "$C/meta.json.tmp" && mv -f "$C/meta.json.tmp" "$C/meta.json"
+find "$C/out" -maxdepth 1 -name '*.png' -mmin +60 -delete
+cat "$C/meta.json"
+  """) every 1m json timeout 90s status
+
+  let ZONES = [
+    {id: "gran", name: "Gran Mendoza"},
+    {id: "norte", name: "Oasis Norte"},
+    {id: "uco", name: "Valle de Uco"},
+    {id: "sur", name: "Sur"},
+    {id: "provincia", name: "Provincia"}
+  ]
+  let zoneName = find(ZONES, z => z.id == zone).name ?? "Gran Mendoza"
+  let layerLabel = layer == "granizo" ? "Granizo" : "Radar"
+  // escalas de la DACC: reflectividad (dBZ) y probabilidad de granizo (%)
+  let LEGEND_DBZ = ["#005A00", "#007000", "#087FDB", "#1C47E8", "#6E0DC6", "#C80F86", "#C06487", "#D2883B", "#FAC431", "#FEFA03", "#FE9A58", "#FE5F05", "#FD341C"]
+  let LEGEND_HAIL = ["#006400", "#9acd32", "#ff7f50", "#ff4500", "#ff0000"]
+
+  let out = radar != null && radar.ok ? radar.out : null
+  let frames = out.frames ?? []
+  let n = len(frames)
+  let geo = out.geo
+  let latest = out.latest
+  let switching = out != null && (out.zone != zone || out.layer != layer)
+  let ageMin = latest != null && now != null ? round((now - latest) / 60) : null
+  let caption = out == null
+    ? (radar == null ? "cargando…" : "sin conexión con la DACC")
+    : switching ? "cargando ${layerLabel} · ${zoneName}…"
+    : "${fmtTime(latest, "HH:mm")} · hace ${ageMin} min"
+  let shownIdx = view == "loop" ? min(frame, n - 1) : n - 1
+  let img = n > 0 ? frames[shownIdx] : null
+  let shownTime = out != null ? out.times[shownIdx] : null
+  let maxPanX = (screenWidth ?? 0) / 2 * (zoom - 1)
+  let maxPanY = (screenHeight ?? 0) * 0.45 * (zoom - 1)
+  // alto del mapa en la pantalla: el de la imagen a todo el ancho, sin franjas negras
+  let mapH = geo != null ? min(((screenWidth ?? 360) - 24) * geo.h / geo.w, (screenHeight ?? 800) * 0.5) : 300
+
+  // el lugar de quien lo usa: anillo rojo, viento y avisos
+  let DEPTS = [
+    {id: "capital", name: "Capital", lat: -32.889, lon: -68.845},
+    {id: "godoy", name: "Godoy Cruz", lat: -32.925, lon: -68.845},
+    {id: "guaymallen", name: "Guaymallén", lat: -32.900, lon: -68.785},
+    {id: "lasheras", name: "Las Heras", lat: -32.850, lon: -68.820},
+    {id: "lujan", name: "Luján de Cuyo", lat: -33.0393, lon: -68.8780},
+    {id: "maipu", name: "Maipú", lat: -32.983, lon: -68.783},
+    {id: "lavalle", name: "Lavalle", lat: -32.720, lon: -68.590},
+    {id: "sanmartin", name: "San Martín", lat: -33.081, lon: -68.468},
+    {id: "junin", name: "Junín", lat: -33.145, lon: -68.490},
+    {id: "rivadavia", name: "Rivadavia", lat: -33.190, lon: -68.460},
+    {id: "santarosa", name: "Santa Rosa", lat: -33.250, lon: -68.150},
+    {id: "lapaz", name: "La Paz", lat: -33.460, lon: -67.550},
+    {id: "tupungato", name: "Tupungato", lat: -33.370, lon: -69.150},
+    {id: "tunuyan", name: "Tunuyán", lat: -33.578, lon: -69.017},
+    {id: "sancarlos", name: "San Carlos", lat: -33.770, lon: -69.050},
+    {id: "sanrafael", name: "San Rafael", lat: -34.617, lon: -68.330},
+    {id: "alvear", name: "Gral. Alvear", lat: -34.977, lon: -67.690},
+    {id: "malargue", name: "Malargüe", lat: -35.475, lon: -69.585}
+  ]
+  let dept = find(DEPTS, d => d.id == place)
+  let useGps = place == "gps" && gpsLat != null
+  let plat = useGps ? gpsLat : (dept.lat ?? -32.889)
+  let plon = useGps ? gpsLon : (dept.lon ?? -68.845)
+  let placeShort = place == "gps" ? "mi ubicación" : (dept.name ?? "Capital")
+  let placeName = place == "gps" ? (useGps ? "tu ubicación" : "tu ubicación (esperando el GPS)") : (dept.name ?? "Capital")
+
+  // el lugar sobre la imagen (Mercator: x lineal en longitud, y por la secante de la latitud)
+  let markX = geo != null && geo.lonw != null ? (plon - geo.lonw) / (geo.lone - geo.lonw) * geo.w : null
+  let markY = geo != null && geo.latn != null
+    ? geo.h * (rad(geo.latn - plat) / cos(rad((geo.latn + plat) / 2))) / (rad(geo.latn - geo.lats) / cos(rad((geo.latn + geo.lats) / 2)))
+    : null
+  let markOn = markX != null && markY != null && markX > 0 && markY > 0 && markX < geo.w && markY < geo.h
+
+  // Viento modelado (Open-Meteo, DWD ICON / NOAA GFS) en el lugar elegido
+  source wind = http("https://api.open-meteo.com/v1/forecast?latitude=${enc(round(plat, 3))}&longitude=${enc(round(plon, 3))}&current=wind_speed_10m,wind_direction_10m,wind_gusts_10m&wind_speed_unit=kmh&timezone=America%2FArgentina%2FMendoza") every 15m json timeout 20s status
+  let cur = wind != null && wind.ok && wind.out != null ? wind.out.current : null
+  let DIRS = split("N NNE NE ENE E ESE SE SSE S SSO SO OSO O ONO NO NNO", " ")
+  let windDeg = cur != null ? num(cur.wind_direction_10m, 0) : 0
+  let windDir = DIRS[int((windDeg + 11.25) % 360 / 22.5)]
+  let windText = cur == null ? null
+    : "${placeShort} ${windDir} ${round(num(cur.wind_speed_10m, 0))} km/h · ráf. ${round(num(cur.wind_gusts_10m, 0))}"
+
+  // 2: severa (≥57 dBZ o granizo ≥70%), 1: fuerte (≥50 dBZ), 0: nada; vale 30 min
+  let alertFresh = alert != null && alert.t != null && now != null && now - alert.t < 1800
+  let sev = !alertFresh ? 0 : (alert.dbz >= 57 || alert.hail >= 70) ? 2 : alert.dbz >= 50 ? 1 : 0
+  let alertDismissed = dismissedAt > 0 && now != null && now - dismissedAt < 3600 && sev <= dismissedSev
+  let showAlert = alertsOn && sev > 0 && !alertDismissed
+  let aDist = alert == null || alert.t == null ? -1 : (alert.dbzDist >= 0 ? alert.dbzDist : alert.hailDist)
+  let aBrg = alert == null || alert.t == null ? 0 : (alert.dbzDist >= 0 ? alert.dbzBrg : alert.hailBrg)
+  let aWhere = aDist < 0 ? "" : aDist < 3 ? "sobre ${placeName}" : "a ${round(aDist)} km al ${DIRS[int((aBrg + 11.25) % 360 / 22.5)]} de ${placeName}"
+  let alertTitle = sev == 2
+    ? (alert.hail >= 70 ? "Granizo probable (${alert.hail}%)" : "Tormenta severa (${alert.dbz} dBZ)")
+    : "Tormenta fuerte (${alert.dbz} dBZ)"
+  let alertText = !alertsOn ? "avisos de tormenta apagados"
+    : sev > 0 ? "${alertTitle} ${aWhere}"
+    : alertFresh ? "sin tormentas fuertes a menos de ${alertKm} km de ${placeName}"
+    : "avisos: revisando el radar…"
+
+  // Aviso de tormenta: mira el último cuadro de lluvia y de granizo de la DACC en un círculo
+  // de alertKm alrededor del lugar (1 píxel del radar = 1 km). Corre cada `intervalMin` minutos,
+  // también con la página fuera de la vista, y guarda el resultado en state.json.
+  at nextCheck {
+    nextCheck = max(nextCheck, now ?? 0) + intervalMin * 60
+    if alertsOn {
+      run("export P_LAT=${round(plat, 4)} P_LON=${round(plon, 4)} P_R=${int(alertKm)}; " + """
+set -euo pipefail
+export LC_ALL=C
+B="https://www2.contingencias.mendoza.gov.ar/radar/web"
+D=~/.cache/omalauncher-radar-mendoza/alert
+mkdir -p "$D"
+NOW=$(date +%s)
+curl -fsm 30 --compressed -o "$D/list.json" "$B/file_list.json?v=$NOW"
+read -r CX CY <<< "$(awk -v lat="$P_LAT" -v lon="$P_LON" 'function my(l,  r){ r=l*3.14159265358979/180; return log((1+sin(r))/cos(r)) }
+  BEGIN { rlatS=-34-250/110.924+0.046; rlatN=-34+450/110.924+0.046; rlonW=-68-250/92.425; rlonE=-68+250/92.425
+    printf "%d %d\n", (lon-rlonW)/(rlonE-rlonW)*500, (my(rlatN)-my(lat))/(my(rlatN)-my(rlatS))*700 }')"
+S=$(( 2 * P_R + 1 )); X0=$(( CX - P_R )); Y0=$(( CY - P_R ))
+RES=""; T=""
+for L in dbz granizo; do
+  F=$(jq -r --arg layer "$L" '[to_entries[] | .key as $k | .value[] | select(test("^[0-9]{6}_" + $layer + "\\.png$")) | "\($k)_\(.[0:6])"] | sort | last // empty' "$D/list.json")
+  if [ -n "$F" ] && [ "$(cat "$D/$L.t" 2>/dev/null)" != "$F" ]; then
+    DAY=$(echo "$F" | cut -c1-8); HMS=$(echo "$F" | cut -c10-15)
+    if curl -fsm 20 -o "$D/$L.png.tmp" "$B/$DAY/$HMS"_"$L.png"; then
+      mv -f "$D/$L.png.tmp" "$D/$L.png"; echo "$F" > "$D/$L.t"
+    else
+      rm -f "$D/$L.png.tmp"
+    fi
+  fi
+  if [ -s "$D/$L.png" ]; then
+    # colores de la DACC con el valor de abajo de cada escalón
+    PAL="0,90,0,10 0,112,0,20 8,127,219,30 28,71,232,35 110,13,198,36 200,15,134,39 192,100,135,42 210,136,59,45 250,196,49,48 254,250,3,51 254,154,88,54 254,95,5,57 253,52,28,60 128,128,128,65 211,211,211,70"
+    TH=50
+    if [ "$L" = granizo ]; then PAL="0,100,0,50 154,205,50,60 255,127,80,70 255,69,0,80 255,0,0,90"; TH=70; fi
+    RES="$RES $(magick "$D/$L.png" -crop "$S"x"$S"+"$X0"+"$Y0" +repage txt:- | awk -F'[,:() ]+' -v pal="$PAL" -v r="$P_R" -v th="$TH" '
+      BEGIN { n = split(pal, P, " "); for (i = 1; i <= n; i++) { split(P[i], c, ","); R[i] = c[1]; G[i] = c[2]; B[i] = c[3]; V[i] = c[4] }; mx = 0; nd = -1; nb = 0 }
+      /^#/ { next }
+      $6 > 0 {
+        dx = $1 - r; dy = $2 - r; d = sqrt(dx * dx + dy * dy); if (d > r) next
+        best = -1; v = 0
+        for (i = 1; i <= n; i++) { e = ($3 - R[i]) ^ 2 + ($4 - G[i]) ^ 2 + ($5 - B[i]) ^ 2; if (best < 0 || e < best) { best = e; v = V[i] } }
+        if (best > 1600) next
+        cnt[v]++
+        if (v >= th && (nd < 0 || d < nd)) { nd = d; nb = (atan2(dx, -dy) * 180 / 3.14159265 + 360) % 360 }
+      }
+      # el valor que alcanzan al menos 3 píxeles (3 km²), para no avisar por un píxel suelto
+      END { k = 0; for (i = n; i >= 1; i--) { k += cnt[V[i]]; if (k >= 3) { mx = V[i]; break } }; if (mx < th) nd = -1; printf "%d %d %d", mx, nd, nb }')"
+  else
+    RES="$RES 0 -1 0"
+  fi
+  [ "$L" = dbz ] && T=$(cat "$D/dbz.t" 2>/dev/null || true)
+done
+[ -n "$T" ] || exit 1
+TS=$(date -u -d "$(echo "$T" | sed -E 's/(....)(..)(..)_(..)(..)(..)/\1-\2-\3 \4:\5:\6/')" +%s)
+set -- $RES
+jq -cn --argjson t "$TS" --argjson checked "$NOW" --argjson km "$P_R" --argjson dbz "$1" --argjson dd "$2" --argjson db "$3" --argjson hail "$4" --argjson hd "$5" --argjson hb "$6" \
+  '{t: $t, checked: $checked, km: $km, dbz: $dbz, dbzDist: $dd, dbzBrg: $db, hail: $hail, hailDist: $hd, hailBrg: $hb}' > "$D/state.json.tmp" && mv -f "$D/state.json.tmp" "$D/state.json"
+""")
+    }
+  }
+  // avisa al aparecer una tormenta, o si empeora; la misma no vuelve a avisar en una hora
+  on sev {
+    if value == 0 {
+      dismissedAt = 0
+      dismissedSev = 0
+    }
+    if alertsOn && value > 0 && (value > lastNotifSev || alert.t - lastNotifAt > 3600) {
+      notify("⚠ ${alertTitle}", "${aWhere} · radar DACC ${fmtTime(alert.t, "HH:mm")}")
+      lastNotifSev = value
+      lastNotifAt = alert.t
+    }
+  }
+  on place {
+    showPlaces = false
+    dismissedAt = 0
+    dismissedSev = 0
+    nextCheck = (now ?? 0) + 2
+  }
+  on alertKm {
+    dismissedAt = 0
+    dismissedSev = 0
+    nextCheck = (now ?? 0) + 2
+  }
+  on alertsOn {
+    if value {
+      dismissedAt = 0
+      dismissedSev = 0
+      nextCheck = (now ?? 0) + 2
+    }
+  }
+  on here {
+    if value != null && value.lat != null {
+      gpsLat = value.lat
+      gpsLon = value.lon
+    }
+  }
+
+  // la zona y la capa elegidas quedan en archivos que lee el script; al cambiarlas se baja enseguida
+  on zone first {
+    run("mkdir -p ~/.cache/omalauncher-radar-mendoza && printf '%s' ${sh(zone)} > ~/.cache/omalauncher-radar-mendoza/zone && date +%s > ~/.cache/omalauncher-radar-mendoza/force")
+    zoom = 1
+    panX = 0
+    panY = 0
+    refresh()
+  }
+  on layer first {
+    run("mkdir -p ~/.cache/omalauncher-radar-mendoza && printf '%s' ${sh(layer)} > ~/.cache/omalauncher-radar-mendoza/layer && date +%s > ~/.cache/omalauncher-radar-mendoza/force")
+    refresh()
+  }
+  on intervalMin first {
+    run("mkdir -p ~/.cache/omalauncher-radar-mendoza && printf '%s' ${int(intervalMin)} > ~/.cache/omalauncher-radar-mendoza/interval.min")
+  }
+
+  // la animación avanza un cuadro por segundo
+  every 1s {
+    if playing && n > 0 {
+      frame = frame >= n - 1 ? 0 : frame + 1
+    }
+  }
+
+  // La flecha apunta hacia donde sopla el viento desde (como una veleta)
+  component WindArrow(bearing, sz = 14, tint = cyan) {
+    Canvas {
+      width: sz
+      height: sz
+      let cx = width / 2
+      let cy = height / 2
+      let r = min(width, height) / 2 - 1
+      circle(cx, cy, r, stroke: border, width: 1)
+      rotate(bearing, cx, cy) {
+        path([{x: cx, y: cy - r * 0.55}, {x: cx + r * 0.5, y: cy + r * 0.45}, {x: cx, y: cy + r * 0.18}, {x: cx - r * 0.5, y: cy + r * 0.45}], closed: true, fill: tint)
+      }
+    }
+  }
+
+  // Marca del lugar elegido sobre la imagen: x, y en píxeles de la imagen de tamaño w×h
+  component Mark(x, y, w, h, cover = false, sz = 1) {
+    Canvas {
+      fill: true
+      let s = cover ? max(width / w, height / h) : min(width / w, height / h)
+      let px = (width - w * s) / 2 + x * s
+      let py = (height - h * s) / 2 + y * s
+      let ax = cover ? px : width / 2 + (px - width / 2) * zoom + panX
+      let ay = cover ? py : height / 2 + (py - height / 2) * zoom + panY
+      let ph = (time % 1.5) / 1.5
+      layer(1 - ph) {
+        circle(ax, ay, sz * (6 + ph * 20), stroke: bright_red, width: 2.5)
+      }
+    }
+  }
+
+  component ZoneBtn(id, label) {
+    Button {
+      text: label
+      color: zone == id ? accent : muted
+      onTap: zone = id
+    }
+  }
+
+  component PlaceBtn(id, label) {
+    Button {
+      text: label
+      color: place == id ? accent : muted
+      onTap: place = id
+    }
+  }
+
+  component KmBtn(km) {
+    Button {
+      text: "${km} km"
+      color: alertKm == km ? accent : muted
+      onTap: alertKm = km
+    }
+  }
+
+  component IntervalBtn(m) {
+    Button {
+      text: "${m}m"
+      color: intervalMin == m ? accent : muted
+      onTap: intervalMin = m
+    }
+  }
+
+  onTap: screen()
+
+  Box {
+    fill: true
+    align: bottom
+    if img != null {
+      Image { src: frames[n - 1]; fit: cover; fill: true }
+      if markOn {
+        Mark { x: markX; y: markY; w: geo.w; h: geo.h; cover: true; sz: 0.8 }
+      }
+    } else {
+      Column {
+        fill: true
+        align: center
+        gap: 4
+        Text { text: "Radar Mendoza"; style: muted }
+        Text { text: caption; style: small; color: muted }
+      }
+    }
+    Column {
+      fill: width
+      gap: 0
+      padding: [10, 6]
+      background: alpha(background, 0.75)
+      if showAlert {
+        Row {
+          gap: 6
+          align: center
+          fill: width
+          onTap: {
+            dismissedAt = now ?? 1
+            dismissedSev = sev
+          }
+          Text { text: "⚠ ${alertTitle} ${aWhere}"; fontSize: 11; color: sev == 2 ? red : yellow; maxLines: 2; weight: 1 }
+          Text { text: "✕"; fontSize: 12; color: muted; padding: [4, 2] }
+        }
+      }
+      Row {
+        fill: width
+        align: center
+        gap: 6
+        Text { text: "${layerLabel} · ${zoneName}"; fontSize: 12; maxLines: 1; weight: 1 }
+        Text { text: "DACC · Esri"; fontSize: 9; color: muted; maxLines: 1 }
+      }
+      Text { text: caption; fontSize: 10; color: ageMin != null && ageMin > 20 ? yellow : muted; maxLines: 1 }
+      if windText != null {
+        Row {
+          gap: 4
+          align: center
+          WindArrow { bearing: windDeg }
+          Text { text: windText; fontSize: 10; color: cyan; maxLines: 1 }
+        }
+      }
+    }
+  }
+
+  screen {
+    title: "${layerLabel} · ${zoneName}"
+    Column {
+      fill: true
+      gap: 8
+      padding: 12
+
+      Flow {
+        gap: 6
+        for z in ZONES {
+          ZoneBtn { id: z.id; label: z.name }
+        }
+      }
+
+      Row {
+        gap: 6
+        Button {
+          text: "lluvia (dBZ)"
+          color: layer == "dbz" ? accent : muted
+          onTap: layer = "dbz"
+        }
+        Button {
+          text: "granizo (%)"
+          color: layer == "granizo" ? accent : muted
+          onTap: layer = "granizo"
+        }
+      }
+
+      Row {
+        gap: 6
+        Button {
+          text: "en vivo"
+          color: view == "live" ? accent : muted
+          onTap: {
+            view = "live"
+            playing = false
+          }
+        }
+        Button {
+          text: "animación"
+          color: view == "loop" ? accent : muted
+          onTap: {
+            view = "loop"
+            frame = 0
+            playing = true
+          }
+        }
+        Spacer { weight: 1 }
+        Button {
+          text: "reset"
+          color: zoom == 1 && panX == 0 && panY == 0 ? muted : accent
+          onTap: {
+            zoom = 1
+            panX = 0
+            panY = 0
+          }
+        }
+      }
+
+      if showPlaces {
+        Column {
+          height: mapH
+          fill: width
+          scroll: true
+          gap: 6
+          Text { text: "¿Dónde estás? El anillo rojo, el viento y los avisos usan este lugar."; style: small; color: muted }
+          Flow {
+            gap: 6
+            Button {
+              text: "mi ubicación (GPS)"
+              color: place == "gps" ? accent : muted
+              onTap: {
+                location("request")
+                place = "gps"
+              }
+            }
+            for d in DEPTS {
+              PlaceBtn { id: d.id; label: d.name }
+            }
+          }
+        }
+      } else {
+      Box {
+        height: mapH
+        fill: width
+        clip: true
+        onDrag: {
+          panX = clamp(panX + dx, -maxPanX, maxPanX)
+          panY = clamp(panY + dy, -maxPanY, maxPanY)
+        }
+        onTap: {
+          zoom = zoom < 4 ? zoom + 1 : 1
+          panX = zoom == 1 ? 0 : panX
+          panY = zoom == 1 ? 0 : panY
+        }
+        if img != null {
+          Image { src: img; fit: contain; fill: true; scale: zoom; offset: [panX, panY]; animate scale: spring() }
+          if markOn {
+            Mark { x: markX; y: markY; w: geo.w; h: geo.h }
+          }
+        }
+        if img == null || switching {
+          Column {
+            fill: true
+            align: center
+            gap: 6
+            Text { text: caption; color: foreground; padding: 8; background: alpha(background, 0.7); radius: 6 }
+          }
+        }
+      }
+      }
+
+      // escala de colores según la capa
+      if layer == "granizo" {
+        Column {
+          gap: 2
+          Row {
+            gap: 0
+            for c in LEGEND_HAIL {
+              Box { weight: 1; height: 10; background: c }
+            }
+          }
+          Row {
+            Text { text: "50% granizo"; style: small; color: muted }
+            Spacer { weight: 1 }
+            Text { text: "70%"; style: small; color: muted }
+            Spacer { weight: 1 }
+            Text { text: "90–100%"; style: small; color: muted }
+          }
+        }
+      } else {
+        Column {
+          gap: 2
+          Row {
+            gap: 0
+            for c in LEGEND_DBZ {
+              Box { weight: 1; height: 10; background: c }
+            }
+          }
+          Row {
+            Text { text: "lluvia débil"; style: small; color: muted }
+            Spacer { weight: 1 }
+            Text { text: "fuerte"; style: small; color: muted }
+            Spacer { weight: 1 }
+            Text { text: "granizo probable"; style: small; color: muted }
+          }
+        }
+      }
+
+      if view == "loop" && n > 0 {
+        Row {
+          gap: 8
+          align: center
+          Button {
+            text: playing ? "pausa" : "play"
+            onTap: playing = !playing
+          }
+          Button {
+            text: "◀"
+            onTap: {
+              playing = false
+              frame = frame <= 0 ? n - 1 : frame - 1
+            }
+          }
+          Button {
+            text: "▶"
+            onTap: {
+              playing = false
+              frame = frame >= n - 1 ? 0 : frame + 1
+            }
+          }
+          Text { text: "${fmtTime(shownTime, "HH:mm")} · ${shownIdx + 1}/${n}"; color: foreground }
+        }
+      }
+
+      if windText != null {
+        Row {
+          gap: 6
+          align: center
+          WindArrow { bearing: windDeg; sz: 20 }
+          Text { text: windText; fontSize: 12; color: cyan; maxLines: 1 }
+        }
+      }
+
+      if showAlert {
+        Row {
+          gap: 8
+          align: center
+          fill: width
+          onTap: {
+            dismissedAt = now ?? 1
+            dismissedSev = sev
+          }
+          Text { text: alertText; style: small; color: sev == 2 ? red : yellow; maxLines: 2; weight: 1 }
+          Text { text: "✕"; style: small; color: muted; padding: [4, 2] }
+        }
+      } else {
+        Text { text: alertDismissed && alertsOn && sev > 0 ? "aviso cerrado · ${alertText}" : alertText; style: small; color: muted; maxLines: 2 }
+      }
+
+      Row {
+        gap: 6
+        align: center
+        Button {
+          text: "lugar: ${placeShort}"
+          color: showPlaces ? accent : foreground
+          onTap: showPlaces = !showPlaces
+        }
+      }
+
+      Row {
+        gap: 6
+        align: center
+        Button {
+          text: alertsOn ? "avisos: sí" : "avisos: no"
+          color: alertsOn ? accent : muted
+          onTap: alertsOn = !alertsOn
+        }
+        KmBtn { km: 10 }
+        KmBtn { km: 25 }
+        KmBtn { km: 50 }
+      }
+
+      Row {
+        gap: 6
+        align: center
+        Text { text: "descargar cada"; style: small; color: muted }
+        IntervalBtn { m: 2 }
+        IntervalBtn { m: 5 }
+        IntervalBtn { m: 10 }
+        IntervalBtn { m: 20 }
+      }
+
+      Spacer { weight: 1 }
+
+      Row {
+        gap: 8
+        Button {
+          text: "abrir DACC"
+          onTap: url("https://www2.contingencias.mendoza.gov.ar/radar/web/")
+        }
+        Button {
+          text: "actualizar"
+          onTap: {
+            run("mkdir -p ~/.cache/omalauncher-radar-mendoza && date +%s > ~/.cache/omalauncher-radar-mendoza/force")
+            nextCheck = (now ?? 0) + 2
+            refresh()
+          }
+        }
+      }
+
+      Text {
+        text: "${caption} · tocá el mapa para zoom, arrastrá para moverlo · anillo rojo: ${placeName}"
+        style: small
+        color: muted
+      }
+      Text {
+        text: "Radar: DACC Mendoza · Mapa: Esri, HERE, Garmin, © OpenStreetMap contributors · Viento: Open-Meteo"
+        fontSize: 10
+        color: muted
+      }
+    }
+  }
+}
