@@ -1,0 +1,522 @@
+app "notes" {
+  meta { owl: 24; description: "Notes and checklists on colored cards: pin, archive, labels and search. Kept by the launcher, so they sync to your other devices"; version: "1.0"; license: "MIT"; category: "productivity" }
+  // Every note lives in one persist state, so Connected devices carries them to other phones and
+  // Omarchy (tick notes there). The newest save wins, for all the notes at once.
+  title: open != 0 ? str.note : archive ? str.archive : tag != "" ? tag : "notes"
+  back: open != 0 || archive || tag != "" || query != ""
+  onBack: {
+    if open != 0 {
+      notes = notes.filter(n => !(n.id == open && cur != null && cur.empty))
+      open = 0
+      colors = false
+    } else {
+      archive = false
+      tag = ""
+      query = ""
+    }
+  }
+  edge: true
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+    <rect width="256" height="256" rx="56" fill="#24283B"/>
+    <rect x="58" y="62" width="112" height="132" rx="12" fill="#7DCFFF" transform="rotate(-10 114 128)"/>
+    <rect x="80" y="56" width="120" height="148" rx="12" fill="#16161E" fill-opacity="0.45"/>
+    <rect x="74" y="48" width="120" height="148" rx="12" fill="#F4D774"/>
+    <path d="M194 156v28a12 12 0 0 1-12 12h-28z" fill="#C9A94A"/>
+    <rect x="96" y="76" width="76" height="14" rx="7" fill="#5C4A1E"/>
+    <rect x="96" y="110" width="20" height="20" rx="4" fill="#5C4A1E"/>
+    <path d="M100 120l5 5 9-11" stroke="#F4D774" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="124" y="113" width="48" height="12" rx="6" fill="#8C7434"/>
+    <rect x="96" y="144" width="20" height="20" rx="4" fill="none" stroke="#5C4A1E" stroke-width="5"/>
+    <rect x="124" y="148" width="36" height="12" rx="6" fill="#8C7434"/>
+  </svg>"""
+
+  strings {
+    en {
+      note: "note"; archive: "archive"; notes: "notes"
+      search: "search your notes"
+      takeNote: "take a note…"
+      title: "title"; body: "note"; addItem: "+ item"; addLabel: "+ label"
+      pinned: "pinned"; others: "others"
+      empty: "empty note"
+      noNotes: "no notes yet"; noNotesHint: "take a note below, or start a checklist"
+      noArchive: "nothing archived"; noMatch: "no notes match"
+      ticked: n => n == 1 ? "1 ticked item" : "${n} ticked items"
+      moreTicked: n => "+ ${n} ticked"
+      more: n => "show ${n} more"
+      edited: t => "edited ${t}"
+      editedAgo: d => d == 1 ? "edited yesterday" : "edited ${d} days ago"
+      deleted: "note deleted"; archived: "note archived"; unarchived: "note restored"
+      undo: "undo"
+    }
+  }
+
+  source now = clock every 1m
+  state notes = [] persist
+  state open = 0
+  state archive = false
+  state tag = ""
+  state query = ""
+  state shown = 40
+  state colors = false
+  state showTicked = true
+  state undo = null
+  // What the note's fields start from, taken when it opens. A field whose text changed under it
+  // would start over from that text and drop what's being typed, so these hold still while typing.
+  state snap = {title: "", body: "", items: {}}
+
+  // Card colors: the theme's own, so a theme change recolors every note.
+  let tints = [surface, red, orange, yellow, green, cyan, blue, magenta]
+  // Some themes' muted is close to their own surfaces, so dimmed text is the foreground, faded.
+  let dim = alpha(foreground, 0.55)
+  // Each note with what the views work out from it: its colors, search text, whether it's empty
+  // and roughly how tall its card is, in lines, to balance the two columns.
+  let rich = notes.map(n => merge(n, {
+    bg: n.color == 0 ? surface : mix(surface, tints[n.color], 0.28),
+    page: n.color == 0 ? background : mix(background, tints[n.color], 0.2),
+    edge: n.color == 0 ? border : alpha(tints[n.color], 0.55),
+    hay: lower(join([n.title, n.body, join(n.items.map(i => i.text), " "), join(n.labels, " ")], " ")),
+    empty: trim(n.title) == "" && trim(n.body) == "" && count(n.items, i => trim(i.text) != "") == 0 && len(n.labels) == 0,
+    txt: join(([n.title] + (n.list ? n.items.map(i => (i.done ? "[x] " : "[ ] ") + i.text) : [n.body])).filter(s => trim(s) != ""), "\n"),
+    h: 2 + (trim(n.title) != "" ? 1.5 : 0) + (len(n.labels) > 0 ? 1.5 : 0) + (n.list ? min(6, count(n.items, i => !i.done)) + (any(n.items, i => i.done) ? 1 : 0) : min(9, sum(lines(n.body).map(l => 1 + floor(len(l) / 22)))))
+  }))
+
+  let q = lower(trim(query))
+  let visible = rich.filter(n => (archive ? n.archived : !n.archived) && (tag == "" || indexOf(n.labels, tag) >= 0) && (q == "" || contains(n.hay, q))).sortBy(n => -n.at)
+  let pinnedNotes = archive ? [] : visible.filter(n => n.pinned)
+  let otherNotes = archive ? visible : visible.filter(n => !n.pinned)
+  let allLabels = unique(flatten(notes.map(n => n.labels))).sort()
+  let cur = find(rich, n => n.id == open)
+  let raw = find(notes, n => n.id == open)
+  let today = fmtTime(now ?? 0, "yyyyMMdd")
+
+  // Small line icons, drawn so they follow the theme.
+  component Glyph(kind, tint = foreground, on = false) {
+    Canvas {
+      width: 24; height: 24
+      if kind == "pin" {
+        path([[8, 3], [16, 3], [15, 10], [18, 14], [6, 14], [9, 10]], closed: true, stroke: tint, width: 2)
+        if on { path([[8, 3], [16, 3], [15, 10], [18, 14], [6, 14], [9, 10]], closed: true, fill: tint) }
+        line(12, 14, 12, 21, stroke: tint, width: 2, cap: round)
+      }
+      if kind == "archive" {
+        rect(3, 4, 18, 5, stroke: tint, width: 2)
+        rect(5, 9, 14, 11, stroke: tint, width: 2)
+        line(10, 13, 14, 13, stroke: tint, width: 2, cap: round)
+      }
+      if kind == "color" {
+        circle(12, 12, 9, stroke: tint, width: 2)
+        circle(8, 10, 1.8, fill: tint)
+        circle(12, 7.5, 1.8, fill: tint)
+        circle(16, 10, 1.8, fill: tint)
+      }
+      if kind == "trash" {
+        line(4, 6, 20, 6, stroke: tint, width: 2, cap: round)
+        line(10, 3, 14, 3, stroke: tint, width: 2, cap: round)
+        path([[6, 6], [7, 21], [17, 21], [18, 6]], stroke: tint, width: 2)
+      }
+      if kind == "list" {
+        rect(3, 4, 6, 6, stroke: tint, width: 1.8)
+        line(12, 7, 21, 7, stroke: tint, width: 2, cap: round)
+        rect(3, 14, 6, 6, stroke: tint, width: 1.8)
+        line(12, 17, 21, 17, stroke: tint, width: 2, cap: round)
+      }
+      if kind == "text" {
+        line(4, 6, 20, 6, stroke: tint, width: 2, cap: round)
+        line(4, 12, 20, 12, stroke: tint, width: 2, cap: round)
+        line(4, 18, 14, 18, stroke: tint, width: 2, cap: round)
+      }
+      if kind == "share" {
+        circle(17, 5, 2.6, stroke: tint, width: 2)
+        circle(6, 12, 2.6, stroke: tint, width: 2)
+        circle(17, 19, 2.6, stroke: tint, width: 2)
+        line(8.3, 10.8, 14.7, 6.2, stroke: tint, width: 2)
+        line(8.3, 13.2, 14.7, 17.8, stroke: tint, width: 2)
+      }
+      if kind == "search" {
+        circle(10, 10, 6, stroke: tint, width: 2)
+        line(14.5, 14.5, 20, 20, stroke: tint, width: 2, cap: round)
+      }
+      if kind == "close" {
+        line(6, 6, 18, 18, stroke: tint, width: 2, cap: round)
+        line(18, 6, 6, 18, stroke: tint, width: 2, cap: round)
+      }
+      if kind == "check" {
+        path([[5, 12], [10, 17], [19, 7]], stroke: tint, width: 2.6, cap: round)
+      }
+    }
+  }
+
+  component Tick(done, size = 22) {
+    Box {
+      width: size; height: size
+      border: 2
+      borderColor: done ? accent : dim
+      background: done ? accent : alpha(accent, 0)
+      radius: 3 * corners
+      align: center
+      if done { Glyph { kind: "check"; tint: background; scale: size / 26 } }
+    }
+  }
+
+  component Card(n) {
+    Column {
+      fill: width
+      padding: 12
+      gap: 6
+      background: n.bg
+      border: 1
+      borderColor: n.edge
+      radius: 8 * corners
+      onTap: { open = n.id; undo = null; showTicked = true; snap = {title: n.title, body: n.body, items: reduce(n.items, (m, i) => set(m, "i${i.id}", i.text), {})} }
+      if trim(n.title) != "" || n.pinned {
+        Row {
+          align: top
+          gap: 4
+          Text { text: n.title; bold: true; weight: 1; maxLines: 2 }
+          if n.pinned && !archive { Glyph { kind: "pin"; tint: dim; on: true; scale: 0.7 } }
+        }
+      }
+      if n.empty {
+        Text { text: str.empty; color: dim; italic: true }
+      } else if n.list {
+        for i in n.items.filter(i => !i.done).take(6) key i.id {
+          Row {
+            align: center
+            gap: 6
+            Box { width: 11; height: 11; border: 1.5; borderColor: dim; radius: 2 * corners }
+            Text { text: i.text; style: small; weight: 1; maxLines: 1 }
+          }
+        }
+        let doneN = count(n.items, i => i.done)
+        let hidden = count(n.items, i => !i.done) - 6
+        if hidden > 0 { Text { text: "…"; color: dim; style: small } }
+        if doneN > 0 { Text { text: str.moreTicked(doneN); color: dim; style: small } }
+      } else if trim(n.body) != "" {
+        Text { text: n.body; style: small; maxLines: 10 }
+      }
+      if len(n.labels) > 0 {
+        Flow {
+          gap: 4
+          for l in n.labels {
+            Text { text: l; fontSize: 11; color: alpha(foreground, 0.8); padding: [6, 2]; background: alpha(background, 0.35); radius: 3 * corners }
+          }
+        }
+      }
+    }
+  }
+
+  // Two columns, each card going to the shorter one, as on a corkboard.
+  component Masonry(items) {
+    Row {
+      align: top
+      gap: 8
+      let m = reduce(items, (a, n) => a.hl <= a.hr ? {l: a.l + [n], r: a.r, hl: a.hl + n.h, hr: a.hr} : {l: a.l, r: a.r + [n], hl: a.hl, hr: a.hr + n.h}, {l: [], r: [], hl: 0, hr: 0})
+      Column { weight: 1; gap: 8; for n in m.l key n.id { Card { n: n } } }
+      Column { weight: 1; gap: 8; for n in m.r key n.id { Card { n: n } } }
+    }
+  }
+
+  component Chip(name, on) {
+    Text {
+      text: name
+      padding: [12, 6]
+      border: 1
+      borderColor: on ? accent : border
+      color: on ? accent : foreground
+      background: on ? alpha(accent, 0.12) : alpha(accent, 0)
+      radius: 3 * corners
+    }
+  }
+
+  Column {
+    fill: true
+    gap: 0
+    background: open != 0 && cur != null ? cur.page : background
+
+    if open != 0 && cur != null {
+      // ── one note ──
+      Column {
+        weight: 1
+        scroll: true
+        padding: [16, 4]
+        gap: 6
+        Input {
+          text: snap.title
+          placeholder: str.title
+          fontSize: 20
+          underline: false
+          fill: width
+          onChange: notes = notes.map(x => x.id == open ? merge(x, {title: value, at: now ?? x.at}) : x)
+        }
+        if !cur.list {
+          Input {
+            text: snap.body
+            placeholder: str.body
+            fontSize: 16
+            underline: false
+            lines: 400
+            fill: width
+            focus: cur.title == "" && cur.body == ""
+            onChange: notes = notes.map(x => x.id == open ? merge(x, {body: value, at: now ?? x.at}) : x)
+          }
+        } else {
+          for it in cur.items.filter(i => !i.done) key it.id {
+            Row {
+              align: center
+              gap: 10
+              Box { padding: 4; onTap: { notes = notes.map(x => x.id == open ? merge(x, {items: x.items.map(i => i.id == it.id ? merge(i, {done: true}) : i), at: now ?? x.at}) : x); snap = set(snap, "items", set(snap.items, "i${it.id}", it.text)) }; Tick { done: false } }
+              Input {
+                text: get(snap.items, "i${it.id}", it.text)
+                lines: 4
+                underline: false
+                fontSize: 16
+                weight: 1
+                onChange: notes = notes.map(x => x.id == open ? merge(x, {items: x.items.map(i => i.id == it.id ? merge(i, {text: value}) : i), at: now ?? x.at}) : x)
+              }
+              Box { padding: 6; onTap: notes = notes.map(x => x.id == open ? merge(x, {items: x.items.filter(i => i.id != it.id), at: now ?? x.at}) : x); Glyph { kind: "close"; tint: dim; scale: 0.8 } }
+            }
+          }
+          Input {
+            placeholder: str.addItem
+            underline: false
+            fontSize: 16
+            fill: width
+            clear: true
+            focus: len(cur.items) == 0
+            onSubmit: {
+              if trim(value) != "" {
+                let iid = random(1, 2000000000)
+                notes = notes.map(x => x.id == open ? merge(x, {items: x.items + [{id: iid, text: trim(value), done: false}], at: now ?? x.at}) : x)
+                snap = set(snap, "items", set(snap.items, "i${iid}", trim(value)))
+              }
+            }
+          }
+          let doneItems = cur.items.filter(i => i.done)
+          if len(doneItems) > 0 {
+            Spacer { height: 1; fill: width; background: cur.edge }
+            Text { text: (showTicked ? "▾ " : "▸ ") + str.ticked(len(doneItems)); color: dim; padding: [0, 6]; onTap: showTicked = !showTicked }
+            if showTicked {
+              for it in doneItems key it.id {
+                Row {
+                  align: center
+                  gap: 10
+                  Box { padding: 4; onTap: { notes = notes.map(x => x.id == open ? merge(x, {items: x.items.map(i => i.id == it.id ? merge(i, {done: false}) : i), at: now ?? x.at}) : x); snap = set(snap, "items", set(snap.items, "i${it.id}", it.text)) }; Tick { done: true } }
+                  Text { text: it.text; color: dim; weight: 1 }
+                  Box { padding: 6; onTap: notes = notes.map(x => x.id == open ? merge(x, {items: x.items.filter(i => i.id != it.id), at: now ?? x.at}) : x); Glyph { kind: "close"; tint: dim; scale: 0.8 } }
+                }
+              }
+            }
+          }
+        }
+        Spacer { height: 8 }
+        Flow {
+          gap: 6
+          for l in cur.labels {
+            Row {
+              gap: 4
+              align: center
+              padding: [10, 4]
+              background: alpha(foreground, 0.08)
+              radius: 3 * corners
+              onTap: notes = notes.map(x => x.id == open ? merge(x, {labels: x.labels.filter(k => k != l), at: now ?? x.at}) : x)
+              Text { text: l; style: small }
+              Glyph { kind: "close"; tint: dim; scale: 0.55; width: 14; height: 14 }
+            }
+          }
+        }
+        Input {
+          placeholder: str.addLabel
+          underline: false
+          fontSize: 14
+          width: 160
+          clear: true
+          onSubmit: {
+            let l = lower(trim(value))
+            if l != "" && indexOf(cur.labels, l) < 0 {
+              notes = notes.map(x => x.id == open ? merge(x, {labels: x.labels + [l], at: now ?? x.at}) : x)
+            }
+          }
+        }
+        Spacer { height: 24 }
+      }
+
+      if colors {
+        Row {
+          scroll: true
+          gap: 10
+          padding: [16, 10]
+          for c in range(len(tints)) {
+            Box {
+              width: 34; height: 34
+              radius: 17 * corners
+              background: c == 0 ? background : tints[c]
+              border: cur.color == c ? 3 : 1
+              borderColor: cur.color == c ? foreground : border
+              align: center
+              onTap: notes = notes.map(x => x.id == open ? merge(x, {color: c, at: now ?? x.at}) : x)
+              if cur.color == c { Glyph { kind: "check"; tint: c == 0 ? foreground : background; scale: 0.8 } }
+            }
+          }
+        }
+      }
+      Row {
+        align: center
+        gap: 2
+        padding: [8, 4, 16, 4]
+        Box { padding: 10; onTap: colors = !colors; Glyph { kind: "color"; tint: colors ? accent : foreground } }
+        Box {
+          padding: 10
+          onTap: notes = notes.map(x => x.id == open ? merge(x, {pinned: !x.pinned, at: now ?? x.at}) : x)
+          Glyph { kind: "pin"; tint: cur.pinned ? accent : foreground; on: cur.pinned }
+        }
+        Box {
+          padding: 10
+          onTap: {
+            if cur.list {
+              let b = join(cur.items.map(i => i.text), "\n")
+              snap = {title: cur.title, body: b, items: {}}
+              notes = notes.map(x => x.id == open ? merge(x, {list: false, body: b, items: [], at: now ?? x.at}) : x)
+            } else {
+              let base = random(1, 1000000000)
+              let its = lines(cur.body).filter(s => trim(s) != "").map((s, k) => ({id: base + k, text: trim(s), done: false}))
+              snap = {title: cur.title, body: "", items: reduce(its, (m, i) => set(m, "i${i.id}", i.text), {})}
+              notes = notes.map(x => x.id == open ? merge(x, {list: true, items: its, body: "", at: now ?? x.at}) : x)
+            }
+          }
+          Glyph { kind: cur.list ? "text" : "list" }
+        }
+        Box { padding: 10; onTap: share(cur.txt); Glyph { kind: "share" } }
+        Box {
+          padding: 10
+          onTap: {
+            undo = {note: raw, msg: cur.archived ? str.unarchived : str.archived}
+            notes = notes.map(x => x.id == open ? merge(x, {archived: !x.archived, pinned: false, at: now ?? x.at}) : x)
+            open = 0
+            colors = false
+          }
+          Glyph { kind: "archive" }
+        }
+        Box {
+          padding: 10
+          onTap: {
+            if !cur.empty { undo = {note: raw, msg: str.deleted} }
+            notes = notes.filter(x => x.id != open)
+            open = 0
+            colors = false
+          }
+          Glyph { kind: "trash" }
+        }
+        Spacer { weight: 1 }
+        let ago = round(((now ?? cur.at) - cur.at) / 86400)
+        Text { text: fmtTime(cur.at, "yyyyMMdd") == today ? str.edited(fmtTime(cur.at, "HH:mm")) : ago <= 30 ? str.editedAgo(max(1, ago)) : str.edited(fmtTime(cur.at, "d MMM")); style: small; color: dim }
+      }
+      Spacer { height: screenInset }
+    } else {
+      // ── all notes ──
+      Column {
+        padding: [12, 8, 12, 4]
+        gap: 8
+        Row {
+          align: center
+          gap: 6
+          padding: [12, 2]
+          background: surface
+          border: 1
+          borderColor: border
+          radius: 8 * corners
+          Glyph { kind: "search"; tint: dim }
+          Input {
+            text: query
+            placeholder: str.search
+            underline: false
+            weight: 1
+            onChange: { query = value; shown = 40 }
+          }
+          if query != "" { Box { padding: 6; onTap: query = ""; Glyph { kind: "close"; tint: dim } } }
+        }
+        Row {
+          scroll: true
+          gap: 6
+          Box { onTap: { archive = false; tag = ""; shown = 40 }; Chip { name: str.notes; on: !archive && tag == "" } }
+          for l in allLabels {
+            Box { onTap: { archive = false; tag = tag == l ? "" : l; shown = 40 }; Chip { name: l; on: tag == l } }
+          }
+          Box { onTap: { archive = !archive; tag = ""; shown = 40 }; Chip { name: str.archive; on: archive } }
+        }
+      }
+      Column {
+        weight: 1
+        scroll: true
+        padding: [12, 6]
+        gap: 8
+        if len(visible) == 0 {
+          Spacer { height: 80 }
+          Text { text: q != "" ? str.noMatch : archive ? str.noArchive : str.noNotes; style: title; color: dim; align: center; fill: width }
+          if q == "" && !archive { Text { text: str.noNotesHint; color: dim; align: center; fill: width } }
+        }
+        if len(pinnedNotes) > 0 {
+          Text { text: str.pinned; style: label; color: dim; padding: [4, 2] }
+          Masonry { items: pinnedNotes }
+          if len(otherNotes) > 0 { Text { text: str.others; style: label; color: dim; padding: [4, 8, 4, 2] } }
+        }
+        Masonry { items: otherNotes.take(shown) }
+        if len(otherNotes) > shown {
+          Button { text: str.more(min(40, len(otherNotes) - shown)); onTap: shown = shown + 40 }
+        }
+        Spacer { height: 16 }
+      }
+      if undo != null {
+        Row {
+          align: center
+          padding: [16, 4, 8, 4]
+          background: surface
+          Text { text: undo.msg; weight: 1 }
+          Text {
+            text: str.undo
+            bold: true
+            color: accent
+            padding: [12, 10]
+            onTap: { notes = [undo.note] + notes.filter(x => x.id != undo.note.id); undo = null }
+          }
+        }
+      }
+      if !archive {
+        Row {
+          align: center
+          gap: 4
+          padding: [16, 4, 8, 4]
+          background: surface
+          border: 1
+          borderColor: border
+          Text {
+            text: str.takeNote
+            color: dim
+            weight: 1
+            padding: [0, 14]
+            onTap: {
+              let id = random(1, 2000000000)
+              notes = [{id: id, title: "", body: "", list: false, items: [], color: 0, pinned: false, archived: false, labels: tag == "" ? [] : [tag], at: now ?? 0}] + notes
+              open = id
+              undo = null
+              query = ""
+              snap = {title: "", body: "", items: {}}
+            }
+          }
+          Box {
+            padding: 12
+            onTap: {
+              let id = random(1, 2000000000)
+              notes = [{id: id, title: "", body: "", list: true, items: [], color: 0, pinned: false, archived: false, labels: tag == "" ? [] : [tag], at: now ?? 0}] + notes
+              open = id
+              undo = null
+              query = ""
+              snap = {title: "", body: "", items: {}}
+            }
+            Glyph { kind: "list" }
+          }
+        }
+      }
+      Spacer { height: screenInset; fill: width; background: archive ? background : surface }
+    }
+  }
+}
