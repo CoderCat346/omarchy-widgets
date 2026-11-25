@@ -4,7 +4,7 @@ widget "terminal" {
   padding: 0
   fps: 20
 
-  meta { owl: 21; description: "Терминал в стиле 8-бит: CRT-сканлайны, подсказки команд"; version: "1.0"; license: "MIT"; category: "dev" }
+  meta { owl: 21; description: "8-bit terminal with CRT scanlines and rotating command hints"; version: "1.1"; license: "MIT"; category: "dev" }
 
   strings {
     en { d0: "files"; d1: "up"; d2: "where am I"; d3: "read"; d4: "edit"; d5: "search"; d6: "package"; d7: "processes"; d8: "disk"; d9: "clear"; d10: "stop"; d11: "history" }

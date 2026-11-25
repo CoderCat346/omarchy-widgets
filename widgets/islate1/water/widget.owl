@@ -5,7 +5,7 @@ widget "water" {
   // Вода прибывает и плещется: быстрее, пока идёт анимация после нажатия
   fps: since < 0.8 ? 30 : 8
 
-  meta { owl: 23; description: "Пиксель-арт трекер воды: стакан, график за неделю, кнопки"; version: "2.0"; license: "MIT"; category: "productivity" }
+  meta { owl: 23; description: "Pixel-art water tracker: a glass that fills, a 7-day chart and +/- buttons"; version: "2.1"; license: "MIT"; category: "productivity" }
   requires { pacman: [] }
 
   strings {
