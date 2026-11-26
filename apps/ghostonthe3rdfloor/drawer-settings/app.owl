@@ -1,5 +1,5 @@
 app "drawer settings" {
-  meta { description: "Sort the app drawer, set its background transparency and manage the folders that group its apps; needs the app drawer face from the same author"; version: "1.1"; license: "MIT"; category: "system"; owl: 16 }
+  meta { description: "Sort the app drawer, set its background transparency and manage the folders that group its apps; needs the app drawer face from the same author"; version: "1.2"; license: "MIT"; category: "system"; owl: 16 }
   requires { pacman: ["bash", "coreutils"] }
   strings {
     en {
@@ -165,13 +165,13 @@ app "drawer settings" {
           align: center
           gap: 4
           padding: [8, 0]
-          Text { text: i == 0 ? str.up : " "; color: accent; width: 24; align: center; onTap: if i > 0 {
+          Text { text: i > 0 ? str.up : " "; color: accent; width: 24; align: center; onTap: if i > 0 {
             let nf = set(set(folders, i, folders[i - 1]), i - 1, folders[i])
             let next = merge(cfg, {folders: nf})
             cfg = next
             run("f=$HOME/.config/omalauncher/drawer-settings.json; printf '%s' ${sh(toJson(next))} > \"$f.tmp\" && mv \"$f.tmp\" \"$f\"")
           } }
-          Text { text: i == len(folders) - 1 ? str.down : " "; color: accent; width: 24; align: center; onTap: if i < len(folders) - 1 {
+          Text { text: i < len(folders) - 1 ? str.down : " "; color: accent; width: 24; align: center; onTap: if i < len(folders) - 1 {
             let nf = set(set(folders, i, folders[i + 1]), i + 1, folders[i])
             let next = merge(cfg, {folders: nf})
             cfg = next
