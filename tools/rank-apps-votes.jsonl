@@ -433,3 +433,13 @@
 {"a": "ghostonthe3rdfloor/drawer-settings", "b": "simonschubert/runeclash", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 15, "looks": 0.0, "useful": 0.0}
 {"a": "ghostonthe3rdfloor/drawer-settings", "b": "simonschubert/notes", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 15, "looks": 0.0, "useful": 0.0}
 {"a": "ghostonthe3rdfloor/drawer-settings", "b": "simonschubert/skyline-bay", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 15, "looks": 0.0, "useful": 0.0}
+{"a": "dgtwt/peg-pop-color-blindness-test", "b": "devbitx/number-slide", "ab": {"looks": "A", "useful": "B"}, "ba": {"looks": "B", "useful": "A"}, "round": 16, "looks": 1.0, "useful": 0.0}
+{"a": "dgtwt/peg-pop-color-blindness-test", "b": "simonschubert/checkmate", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 16, "looks": 0.0, "useful": 0.0}
+{"a": "dgtwt/peg-pop-color-blindness-test", "b": "simonschubert/braincup", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 16, "looks": 0.0, "useful": 0.0}
+{"a": "dgtwt/peg-pop-color-blindness-test", "b": "simonschubert/derelict", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 16, "looks": 0.0, "useful": 0.0}
+{"a": "dgtwt/peg-pop-color-blindness-test", "b": "simonschubert/pixel-fishing", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 16, "looks": 0.0, "useful": 0.0}
+{"a": "dgtwt/peg-pop-color-blindness-test", "b": "simonschubert/voxel-rally", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 16, "looks": 0.0, "useful": 0.0}
+{"a": "dgtwt/peg-pop-color-blindness-test", "b": "simonschubert/skyline-bay", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 16, "looks": 0.0, "useful": 0.0}
+{"a": "dgtwt/peg-pop-color-blindness-test", "b": "simonschubert/climbing", "ab": {"looks": "A", "useful": "B"}, "ba": {"looks": "B", "useful": "A"}, "round": 16, "looks": 1.0, "useful": 0.0}
+{"a": "dgtwt/peg-pop-color-blindness-test", "b": "madness807/libre", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 16, "looks": 0.0, "useful": 0.0}
+{"a": "dgtwt/peg-pop-color-blindness-test", "b": "simonschubert/pixel-pinball", "ab": {"looks": "B", "useful": "B"}, "ba": {"looks": "A", "useful": "A"}, "round": 16, "looks": 0.0, "useful": 0.0}
