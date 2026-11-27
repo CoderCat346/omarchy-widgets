@@ -2,6 +2,57 @@
   "version": 1,
   "messages": [
     {
+      "id": "vote-omarchy-plugin-contest-2026",
+      "end": "2026-11-27T16:00:00Z",
+      "title": {
+        "en": "vote for omalauncher",
+        "de": "stimm für omalauncher",
+        "es": "vota por omalauncher",
+        "id": "pilih omalauncher",
+        "ja": "omalauncher に投票を",
+        "pt": "vote no omalauncher",
+        "ru": "голосуйте за omalauncher",
+        "zh": "为 omalauncher 投票"
+      },
+      "countdown": {
+        "label": {
+          "en": "voting closes in",
+          "de": "abstimmung endet in",
+          "es": "la votación cierra en",
+          "id": "voting ditutup dalam",
+          "ja": "投票締め切りまで",
+          "pt": "a votação encerra em",
+          "ru": "до конца голосования",
+          "zh": "距投票截止还有"
+        }
+      },
+      "body": {
+        "en": "Omalauncher is in Omarchy's plugin contest: your OWL widgets, the widget store and an agent that builds new ones, on the Omarchy desktop. The top 10 share $10,000.\n\nIf you like the launcher, a vote helps a lot. Sign in with GitHub, one vote per person.",
+        "de": "Omalauncher ist beim Plugin-Wettbewerb von Omarchy dabei: deine OWL-Widgets, der Widget-Store und ein Agent, der neue baut, auf dem Omarchy-Desktop. Die Top 10 teilen sich 10.000 $.\n\nWenn dir der Launcher gefällt, hilft deine Stimme sehr. Anmelden mit GitHub, eine Stimme pro Person.",
+        "es": "Omalauncher participa en el concurso de plugins de Omarchy: tus widgets OWL, la tienda de widgets y un agente que crea nuevos, en el escritorio de Omarchy. Los 10 primeros se reparten 10.000 $.\n\nSi te gusta el launcher, tu voto ayuda mucho. Inicia sesión con GitHub, un voto por persona.",
+        "id": "Omalauncher ikut kontes plugin Omarchy: widget OWL kamu, toko widget, dan agen yang membuat widget baru, di desktop Omarchy. 10 besar berbagi $10.000.\n\nKalau kamu suka launcher ini, suaramu sangat membantu. Masuk dengan GitHub, satu suara per orang.",
+        "ja": "Omalauncher が Omarchy のプラグインコンテストに参加中です。OWL ウィジェット、ウィジェットストア、新しいウィジェットを作るエージェントを Omarchy のデスクトップで。上位 10 作品で 10,000 ドルを分け合います。\n\nこのランチャーが気に入ったら、ぜひ投票をお願いします。GitHub でサインイン、1 人 1 票です。",
+        "pt": "O Omalauncher está no concurso de plugins do Omarchy: seus widgets OWL, a loja de widgets e um agente que cria novos, no desktop do Omarchy. Os 10 primeiros dividem US$ 10.000.\n\nSe você gosta do launcher, seu voto ajuda muito. Entre com o GitHub, um voto por pessoa.",
+        "ru": "Omalauncher участвует в конкурсе плагинов Omarchy: ваши OWL-виджеты, магазин виджетов и агент, который создаёт новые, на рабочем столе Omarchy. Первая десятка делит $10 000.\n\nЕсли вам нравится лаунчер, ваш голос очень поможет. Вход через GitHub, один голос на человека.",
+        "zh": "Omalauncher 参加了 Omarchy 插件大赛：你的 OWL 小组件、小组件商店，以及能制作新小组件的智能体，都搬到了 Omarchy 桌面上。前 10 名共享 10,000 美元奖金。\n\n如果你喜欢这个启动器，你的一票会帮上大忙。使用 GitHub 登录，每人一票。"
+      },
+      "buttons": [
+        {
+          "label": {
+            "en": "vote now",
+            "de": "jetzt abstimmen",
+            "es": "votar ahora",
+            "id": "pilih sekarang",
+            "ja": "今すぐ投票",
+            "pt": "votar agora",
+            "ru": "проголосовать",
+            "zh": "立即投票"
+          },
+          "url": "https://contest.omarchy.org/plugins-2026-autumn/omalauncher"
+        }
+      ]
+    },
+    {
       "id": "contest-christmas-2026",
       "end": "2026-11-15T15:00:00Z",
       "title": {
